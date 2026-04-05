@@ -1,15 +1,19 @@
 import ctypes
+import threading
 from ctypes import wintypes
-
+from typing import TYPE_CHECKING
 from PySide6.QtGui import QImage, QPixmap
 
-from app.ui.overlay import WindowOverlay
+if TYPE_CHECKING:
+	from app.ui.overlay import WindowOverlay
 
 # Este módulo contiene funciones y estructuras para interactuar con la API de Windows
 
 # Obtener la el hwnd de la ventana seleccionada
 # Función callback que EnumWindows espera
 WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+_TRACKER_LOCK = threading.Lock()
+_ACTIVE_TRACKER = None
 
 def get_windows():
     windows = []
@@ -200,38 +204,291 @@ def _to_qt_logical_rect(window_handle, x, y, w, h):
 	logical_h = max(1, int(round(h / scale)))
 	return logical_x, logical_y, logical_w, logical_h
   
-def get_current_window_position(window_selected, overlay: WindowOverlay):
+def get_current_window_position(window_selected, overlay: "WindowOverlay"):
 		if not window_selected or not overlay:
 			return False
+		return sync_overlay_to_target_window(window_selected, overlay)
 
-		rect = wintypes.RECT()
+# Constantes para SetWindowPos / GetWindow
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+SWP_SHOWWINDOW = 0x0040
+SWP_NOOWNERZORDER = 0x0200
 
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_LAYERED = 0x00080000
+
+GW_HWNDPREV = 3
+HWND_TOP = 0
+
+User32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+User32.GetWindow.restype = wintypes.HWND
+User32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+User32.GetWindowLongW.restype = ctypes.c_long
+User32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+User32.SetWindowLongW.restype = ctypes.c_long
+
+User32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.UINT
+]
+User32.SetWindowPos.restype = wintypes.BOOL
+
+
+def _get_insert_after_for_overlay(target_hwnd):
+	# Insertar "despues" de la ventana previa equivale a quedar sobre target.
+	prev_hwnd = User32.GetWindow(wintypes.HWND(target_hwnd), GW_HWNDPREV)
+	if prev_hwnd:
+		return prev_hwnd
+	return wintypes.HWND(HWND_TOP)
+
+
+def _hwnd_to_int(hwnd):
+	if hwnd is None:
+		return 0
+	if isinstance(hwnd, int):
+		return hwnd
+	value = getattr(hwnd, "value", None)
+	if isinstance(value, int):
+		return value
+	try:
+		return int(hwnd)
+	except (TypeError, ValueError):
+		return 0
+
+def place_overlay_above_window(overlay: "WindowOverlay", target_hwnd):
+	overlay_hwnd = wintypes.HWND(int(overlay.winId()))
+	insert_after = _get_insert_after_for_overlay(target_hwnd)
+	result = User32.SetWindowPos(
+		overlay_hwnd,
+		insert_after,
+		0, 0, 0, 0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER
+	)
+	if not result:
+		print(f"SetWindowPos fallo al anclar overlay (target={target_hwnd}).")
+		return False
+	return True
+
+
+def move_resize_and_anchor_overlay(overlay: "WindowOverlay", target_hwnd, x, y, w, h):
+	overlay_hwnd = _get_overlay_hwnd(overlay)
+	if not overlay_hwnd:
+		return False
+	return _move_resize_and_anchor_overlay_hwnd(int(overlay_hwnd.value), target_hwnd, x, y, w, h)
+
+
+def _move_resize_and_anchor_overlay_hwnd(overlay_hwnd, target_hwnd, x, y, w, h):
+	overlay_hwnd = wintypes.HWND(int(overlay_hwnd))
+
+	insert_after = _get_insert_after_for_overlay(target_hwnd)
+	insert_after_int = _hwnd_to_int(insert_after)
+	overlay_hwnd_int = _hwnd_to_int(overlay_hwnd)
+
+	flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER
+	# Si ya estamos justo encima del target, no tocar Z-order: solo mover/redimensionar.
+	if insert_after_int == overlay_hwnd_int and overlay_hwnd_int != 0:
+		insert_after = wintypes.HWND(HWND_TOP)
+		flags |= SWP_NOZORDER
+
+	result = User32.SetWindowPos(
+		overlay_hwnd,
+		insert_after,
+		int(x),
+		int(y),
+		int(w),
+		int(h),
+		flags,
+	)
+	if not result:
+		print(
+			f"SetWindowPos fallo al mover/ajustar overlay (target={target_hwnd}, "
+			f"insert_after={insert_after_int}, flags=0x{flags:04X})."
+		)
+		return False
+	return True
+
+
+def _get_target_window_rect(target_hwnd):
+	if not target_hwnd or not User32.IsWindow(target_hwnd):
+		return None
+
+	rect = wintypes.RECT()
+	hr = 1
+	try:
+		hr = Dwmapi.DwmGetWindowAttribute(
+			target_hwnd,
+			DWMWA_EXTENDED_FRAME_BOUNDS,
+			ctypes.byref(rect),
+			ctypes.sizeof(rect),
+		)
+	except OSError:
 		hr = 1
-		try:
-			hr = Dwmapi.DwmGetWindowAttribute(
-				window_selected,
-				DWMWA_EXTENDED_FRAME_BOUNDS,
-				ctypes.byref(rect),
-				ctypes.sizeof(rect),
-			)
-		except OSError:
-			hr = 1
 
-		if hr != 0:
-			if not User32.GetWindowRect(window_selected, ctypes.byref(rect)):
-				print("La ventana objetivo se ha cerrado o no se puede acceder.")
-				return False
+	if hr != 0:
+		if not User32.GetWindowRect(target_hwnd, ctypes.byref(rect)):
+			return None
 
-		x = rect.left
-		y = rect.top
-		w = rect.right - rect.left
-		h = rect.bottom - rect.top
-		if w <= 0 or h <= 0:
-			return False
+	x = rect.left
+	y = rect.top
+	w = rect.right - rect.left
+	h = rect.bottom - rect.top
+	if w <= 0 or h <= 0:
+		return None
+	return x, y, w, h
 
-		x, y, w, h = _to_qt_logical_rect(window_selected, x, y, w, h)
 
-		overlay.setGeometry(x, y, w, h)
-		return True
+def sync_overlay_to_target_window(target_hwnd, overlay: "WindowOverlay"):
+	overlay_hwnd = _get_overlay_hwnd(overlay)
+	if not overlay_hwnd:
+		return False
+	return sync_overlay_to_target_hwnd(target_hwnd, int(overlay_hwnd.value))
+
+
+def sync_overlay_to_target_hwnd(target_hwnd, overlay_hwnd):
+	rect = _get_target_window_rect(target_hwnd)
+	if not rect:
+		print("La ventana objetivo se ha cerrado o no se puede acceder.")
+		return False
+	x, y, w, h = rect
+	return _move_resize_and_anchor_overlay_hwnd(overlay_hwnd, target_hwnd, x, y, w, h)
+
+
+class _NativeOverlayTracker:
+	def __init__(self, target_hwnd, overlay_hwnd, poll_interval_ms=16):
+		self.target_hwnd = int(target_hwnd)
+		self.overlay_hwnd = int(overlay_hwnd)
+		self.poll_interval_sec = max(10, int(poll_interval_ms)) / 1000.0
+		self._stop_event = threading.Event()
+		self._thread = None
+		self._last_rect = None
+
+	def start(self):
+		if self._thread and self._thread.is_alive():
+			return
+		self._thread = threading.Thread(target=self._run, daemon=True)
+		self._thread.start()
+
+	def stop(self):
+		self._stop_event.set()
+		if self._thread and self._thread.is_alive():
+			self._thread.join(timeout=0.3)
+
+	def _run(self):
+		while not self._stop_event.is_set():
+			if not User32.IsWindow(self.target_hwnd) or not User32.IsWindow(self.overlay_hwnd):
+				break
+
+			rect = _get_target_window_rect(self.target_hwnd)
+			if rect and rect != self._last_rect:
+				x, y, w, h = rect
+				_move_resize_and_anchor_overlay_hwnd(self.overlay_hwnd, self.target_hwnd, x, y, w, h)
+				self._last_rect = rect
+
+			self._stop_event.wait(self.poll_interval_sec)
+
+
+def start_native_overlay_tracking(target_hwnd, overlay: "WindowOverlay", poll_interval_ms=16):
+	global _ACTIVE_TRACKER
+
+	if not target_hwnd or not overlay:
+		return False
+
+	overlay_hwnd = _get_overlay_hwnd(overlay)
+	if not overlay_hwnd:
+		return False
+
+	with _TRACKER_LOCK:
+		if _ACTIVE_TRACKER:
+			_ACTIVE_TRACKER.stop()
+			_ACTIVE_TRACKER = None
+
+		tracker = _NativeOverlayTracker(target_hwnd, int(overlay_hwnd.value), poll_interval_ms=poll_interval_ms)
+		tracker.start()
+		_ACTIVE_TRACKER = tracker
+
+	# Sincronizacion inicial inmediata.
+	return sync_overlay_to_target_hwnd(target_hwnd, int(overlay_hwnd.value))
+
+
+def stop_native_overlay_tracking():
+	global _ACTIVE_TRACKER
+	with _TRACKER_LOCK:
+		if _ACTIVE_TRACKER:
+			_ACTIVE_TRACKER.stop()
+			_ACTIVE_TRACKER = None
+
+
+def _get_overlay_hwnd(overlay):
+	if overlay is None:
+		return None
+	try:
+		hwnd_value = int(overlay.winId())
+	except Exception:
+		return None
+	if hwnd_value <= 0:
+		return None
+	return wintypes.HWND(hwnd_value)
+
+
+def enable_overlay_full_click_through(overlay: "WindowOverlay"):
+	"""Activa click-through total del overlay a nivel Win32."""
+	overlay_hwnd = _get_overlay_hwnd(overlay)
+	if not overlay_hwnd:
+		return False
+
+	current_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
+	new_style = current_style | WS_EX_TRANSPARENT | WS_EX_LAYERED
+	if new_style != current_style:
+		User32.SetWindowLongW(overlay_hwnd, GWL_EXSTYLE, new_style)
+
+	User32.SetWindowPos(
+		overlay_hwnd,
+		wintypes.HWND(HWND_TOP),
+		0,
+		0,
+		0,
+		0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+	)
+
+	updated_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
+	is_click_through = (updated_style & WS_EX_TRANSPARENT) != 0
+	if not is_click_through:
+		print("No se pudo activar full click-through en overlay.")
+	return is_click_through
+
+
+def disable_overlay_full_click_through(overlay: "WindowOverlay"):
+	"""Desactiva click-through total del overlay a nivel Win32."""
+	overlay_hwnd = _get_overlay_hwnd(overlay)
+	if not overlay_hwnd:
+		return False
+
+	current_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
+	new_style = current_style & ~WS_EX_TRANSPARENT
+	if new_style != current_style:
+		User32.SetWindowLongW(overlay_hwnd, GWL_EXSTYLE, new_style)
+
+	User32.SetWindowPos(
+		overlay_hwnd,
+		wintypes.HWND(HWND_TOP),
+		0,
+		0,
+		0,
+		0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+	)
+
+	updated_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
+	is_click_through = (updated_style & WS_EX_TRANSPARENT) != 0
+	if is_click_through:
+		print("No se pudo desactivar full click-through en overlay.")
+	return not is_click_through
 
    
