@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsRectItem, QGraphicsItem
-from PySide6.QtCore import Qt, QRectF, Signal, QObject
+from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPen, QColor, QBrush
 
 class ROISchema:
@@ -77,3 +77,4 @@ class ROIDrawer(QGraphicsScene):
                 self.rois.append(ROISchema(i, r.x(), r.y(), r.width(), r.height()))
                 print(f"ROI guardada: ID={i}, x={r.x()}, y={r.y()}, w={r.width()}, h={r.height()}")
         self.rois_changed.emit(len(self.rois) > 0)
+        

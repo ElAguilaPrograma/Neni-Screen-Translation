@@ -3,3 +3,6 @@ pywin32
 mss
 xxhash
 Pillow
+numpy
+rapidocr 
+onnxruntime

@@ -9,11 +9,13 @@ from app.utils.win32_utils import (
     stop_native_overlay_tracking,
 )
 from app.ui.overlay import WindowOverlay
+from app.pipeline.coordinator import PipelineCoordinator
 
 class MainWindow(QMainWindow):
     
     window_selected = None
     overlay: WindowOverlay = None
+    pipeline_coordinator: PipelineCoordinator = None
 
     def __init__(self):
         super().__init__()
@@ -166,7 +168,18 @@ class MainWindow(QMainWindow):
 
         self.overlay.set_mode("edit")
         self.overlay.show()
-        start_native_overlay_tracking(self.window_selected, self.overlay, poll_interval_ms=16)
+        start_native_overlay_tracking(
+            self.window_selected,
+            self.overlay,
+            poll_interval_ms=16,
+            force_reanchor_ms=800,
+        )
+        
+        # Validar aqui si active en pipeline es true, de ser asi llamar a stop_cycle para pausarlo mientras se define el ROI.
+        if hasattr(self.pipeline_coordinator, "active") and self.pipeline_coordinator.active:
+            print("Pausando ciclo de procesamiento para definir ROI...")
+            self.pipeline_coordinator.stop_cycle()
+
         self.btn_start.setText("Definiendo ROI... (Presiona Enter para confirmar)")
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -184,13 +197,32 @@ class MainWindow(QMainWindow):
         self.btn_translate.setEnabled(False)
         print("Seleccion de ROI detenida.")
         
+        PipelineCoordinator.stop_cycle(self.pipeline_coordinator)
+        print("Pipeline de procesamiento detenido.")
+        
     def on_translate(self):
         print("Iniciando traducción... (funcionalidad no implementada)")
+        if not self.overlay or not hasattr(self.overlay, "scene") or not self.overlay.scene.rois:
+            print("No hay ROIs definidas para procesar OCR.")
+            return
+
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
-        self.overlay.set_mode("active")
+        self.overlay.set_mode("active") 
+        if self.window_selected:
+            print(f"Creando PipelineCoordinator para ventana {self.window_selected}...")
+            try:
+                self.pipeline_coordinator = PipelineCoordinator(self.window_selected, True)
+                self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
+                self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
+            except Exception as e:
+                print(f"Error al crear PipelineCoordinator: {e}")
+        
+    def on_text_ready(self, roi_id, text):
+        print(f"Texto OCR listo para ROI {roi_id}: {text}")
+        
 
     def has_overlay_rois(self):
         if not self.overlay or not hasattr(self.overlay, "scene"):

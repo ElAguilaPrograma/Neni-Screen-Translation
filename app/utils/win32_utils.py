@@ -1,5 +1,6 @@
 import ctypes
 import threading
+import time
 from ctypes import wintypes
 from typing import TYPE_CHECKING
 from PySide6.QtGui import QImage, QPixmap
@@ -174,6 +175,98 @@ def capture_window(hwnd):
 			return None
 
 		return QPixmap.fromImage(image.copy())
+	finally:
+		Gdi32.SelectObject(memory_dc, old_bitmap)
+		Gdi32.DeleteObject(bitmap)
+		Gdi32.DeleteDC(memory_dc)
+		User32.ReleaseDC(hwnd, window_dc)
+
+
+def capture_window_roi_for_ocr(hwnd, x, y, w, h):
+	try:
+		import importlib
+		np = importlib.import_module("numpy")
+	except ImportError as exc:
+		raise RuntimeError("Se requiere numpy para capture_window_roi_for_ocr") from exc
+
+	if not hwnd or not User32.IsWindow(hwnd):
+		return None
+
+	rect = wintypes.RECT()
+	if not User32.GetWindowRect(hwnd, ctypes.byref(rect)):
+		return None
+
+	window_width = rect.right - rect.left
+	window_height = rect.bottom - rect.top
+	if window_width <= 0 or window_height <= 0:
+		return None
+
+	scale = _get_window_scale(hwnd)
+	if scale <= 0:
+		scale = 1.0
+
+	roi_x = int(round(float(x) * scale))
+	roi_y = int(round(float(y) * scale))
+	roi_w = max(1, int(round(float(w) * scale)))
+	roi_h = max(1, int(round(float(h) * scale)))
+
+	left = max(0, roi_x)
+	top = max(0, roi_y)
+	right = min(window_width, roi_x + roi_w)
+	bottom = min(window_height, roi_y + roi_h)
+
+	if right <= left or bottom <= top:
+		return None
+
+	window_dc = User32.GetWindowDC(hwnd)
+	if not window_dc:
+		return None
+
+	memory_dc = Gdi32.CreateCompatibleDC(window_dc)
+	if not memory_dc:
+		User32.ReleaseDC(hwnd, window_dc)
+		return None
+
+	bitmap = Gdi32.CreateCompatibleBitmap(window_dc, window_width, window_height)
+	if not bitmap:
+		Gdi32.DeleteDC(memory_dc)
+		User32.ReleaseDC(hwnd, window_dc)
+		return None
+
+	old_bitmap = Gdi32.SelectObject(memory_dc, bitmap)
+	try:
+		if not User32.PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT):
+			if not User32.PrintWindow(hwnd, memory_dc, 0):
+				return None
+
+		bitmap_info = BITMAPINFO()
+		bitmap_info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+		bitmap_info.bmiHeader.biWidth = window_width
+		bitmap_info.bmiHeader.biHeight = -window_height
+		bitmap_info.bmiHeader.biPlanes = 1
+		bitmap_info.bmiHeader.biBitCount = 32
+		bitmap_info.bmiHeader.biCompression = BI_RGB
+		bitmap_info.bmiHeader.biSizeImage = window_width * window_height * 4
+
+		image_size = window_width * window_height * 4
+		buffer = (ctypes.c_ubyte * image_size)()
+		scan_lines = Gdi32.GetDIBits(
+			memory_dc,
+			bitmap,
+			0,
+			window_height,
+			buffer,
+			ctypes.byref(bitmap_info),
+			DIB_RGB_COLORS,
+		)
+		if scan_lines == 0:
+			return None
+
+		full_bgra = np.ctypeslib.as_array(buffer).reshape((window_height, window_width, 4))
+		roi_bgr = full_bgra[top:bottom, left:right, :3].copy()
+		if roi_bgr.size == 0:
+			return None
+		return roi_bgr
 	finally:
 		Gdi32.SelectObject(memory_dc, old_bitmap)
 		Gdi32.DeleteObject(bitmap)
@@ -360,13 +453,15 @@ def sync_overlay_to_target_hwnd(target_hwnd, overlay_hwnd):
 
 
 class _NativeOverlayTracker:
-	def __init__(self, target_hwnd, overlay_hwnd, poll_interval_ms=16):
+	def __init__(self, target_hwnd, overlay_hwnd, poll_interval_ms=16, force_reanchor_ms=800):
 		self.target_hwnd = int(target_hwnd)
 		self.overlay_hwnd = int(overlay_hwnd)
 		self.poll_interval_sec = max(10, int(poll_interval_ms)) / 1000.0
+		self.force_reanchor_sec = max(100, int(force_reanchor_ms)) / 1000.0
 		self._stop_event = threading.Event()
 		self._thread = None
 		self._last_rect = None
+		self._last_reanchor_at = 0.0
 
 	def start(self):
 		if self._thread and self._thread.is_alive():
@@ -385,15 +480,19 @@ class _NativeOverlayTracker:
 				break
 
 			rect = _get_target_window_rect(self.target_hwnd)
-			if rect and rect != self._last_rect:
+			now = time.monotonic()
+
+			should_force_reanchor = (now - self._last_reanchor_at) >= self.force_reanchor_sec
+			if rect and (rect != self._last_rect or should_force_reanchor):
 				x, y, w, h = rect
 				_move_resize_and_anchor_overlay_hwnd(self.overlay_hwnd, self.target_hwnd, x, y, w, h)
 				self._last_rect = rect
+				self._last_reanchor_at = now
 
 			self._stop_event.wait(self.poll_interval_sec)
 
 
-def start_native_overlay_tracking(target_hwnd, overlay: "WindowOverlay", poll_interval_ms=16):
+def start_native_overlay_tracking(target_hwnd, overlay: "WindowOverlay", poll_interval_ms=16, force_reanchor_ms=800):
 	global _ACTIVE_TRACKER
 
 	if not target_hwnd or not overlay:
@@ -408,7 +507,12 @@ def start_native_overlay_tracking(target_hwnd, overlay: "WindowOverlay", poll_in
 			_ACTIVE_TRACKER.stop()
 			_ACTIVE_TRACKER = None
 
-		tracker = _NativeOverlayTracker(target_hwnd, int(overlay_hwnd.value), poll_interval_ms=poll_interval_ms)
+		tracker = _NativeOverlayTracker(
+			target_hwnd,
+			int(overlay_hwnd.value),
+			poll_interval_ms=poll_interval_ms,
+			force_reanchor_ms=force_reanchor_ms,
+		)
 		tracker.start()
 		_ACTIVE_TRACKER = tracker
 
