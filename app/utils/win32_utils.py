@@ -182,12 +182,12 @@ def capture_window(hwnd):
 		User32.ReleaseDC(hwnd, window_dc)
 
 
-def capture_window_roi_for_ocr(hwnd, x, y, w, h):
+def capture_window_for_ocr(hwnd):
 	try:
 		import importlib
 		np = importlib.import_module("numpy")
 	except ImportError as exc:
-		raise RuntimeError("Se requiere numpy para capture_window_roi_for_ocr") from exc
+		raise RuntimeError("Se requiere numpy para capture_window_for_ocr") from exc
 
 	if not hwnd or not User32.IsWindow(hwnd):
 		return None
@@ -199,23 +199,6 @@ def capture_window_roi_for_ocr(hwnd, x, y, w, h):
 	window_width = rect.right - rect.left
 	window_height = rect.bottom - rect.top
 	if window_width <= 0 or window_height <= 0:
-		return None
-
-	scale = _get_window_scale(hwnd)
-	if scale <= 0:
-		scale = 1.0
-
-	roi_x = int(round(float(x) * scale))
-	roi_y = int(round(float(y) * scale))
-	roi_w = max(1, int(round(float(w) * scale)))
-	roi_h = max(1, int(round(float(h) * scale)))
-
-	left = max(0, roi_x)
-	top = max(0, roi_y)
-	right = min(window_width, roi_x + roi_w)
-	bottom = min(window_height, roi_y + roi_h)
-
-	if right <= left or bottom <= top:
 		return None
 
 	window_dc = User32.GetWindowDC(hwnd)
@@ -263,15 +246,51 @@ def capture_window_roi_for_ocr(hwnd, x, y, w, h):
 			return None
 
 		full_bgra = np.ctypeslib.as_array(buffer).reshape((window_height, window_width, 4))
-		roi_bgr = full_bgra[top:bottom, left:right, :3].copy()
-		if roi_bgr.size == 0:
-			return None
-		return roi_bgr
+		# Convertir BGRA -> BGR una sola vez por ciclo para recortar multiples ROI.
+		return full_bgra[:, :, :3].copy()
 	finally:
 		Gdi32.SelectObject(memory_dc, old_bitmap)
 		Gdi32.DeleteObject(bitmap)
 		Gdi32.DeleteDC(memory_dc)
 		User32.ReleaseDC(hwnd, window_dc)
+
+
+def crop_bgr_frame_for_ocr(hwnd, frame_bgr, x, y, w, h):
+	if frame_bgr is None:
+		return None
+
+	frame_h, frame_w = frame_bgr.shape[:2]
+	if frame_w <= 0 or frame_h <= 0:
+		return None
+
+	scale = _get_window_scale(hwnd)
+	if scale <= 0:
+		scale = 1.0
+
+	roi_x = int(round(float(x) * scale))
+	roi_y = int(round(float(y) * scale))
+	roi_w = max(1, int(round(float(w) * scale)))
+	roi_h = max(1, int(round(float(h) * scale)))
+
+	left = max(0, roi_x)
+	top = max(0, roi_y)
+	right = min(frame_w, roi_x + roi_w)
+	bottom = min(frame_h, roi_y + roi_h)
+
+	if right <= left or bottom <= top:
+		return None
+
+	roi_view = frame_bgr[top:bottom, left:right, :3]
+	if roi_view.size == 0:
+		return None
+	return roi_view
+
+
+def capture_window_roi_for_ocr(hwnd, x, y, w, h):
+	frame_bgr = capture_window_for_ocr(hwnd)
+	if frame_bgr is None:
+		return None
+	return crop_bgr_frame_for_ocr(hwnd, frame_bgr, x, y, w, h)
 
 
 def _get_window_scale(window_handle):

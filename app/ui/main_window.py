@@ -10,6 +10,7 @@ from app.utils.win32_utils import (
 )
 from app.ui.overlay import WindowOverlay
 from app.pipeline.coordinator import PipelineCoordinator
+from app.ui.settings_gui import SettingsDialog
 
 class MainWindow(QMainWindow):
     
@@ -37,11 +38,13 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel("La ventana seleccionada aparecerá aquí")
         self.btn_stop = QPushButton("Detener Selección")
         self.btn_translate = QPushButton("Iniciar Traducción")
+        self.btn_settings = QPushButton("Abrir Ajustes de OCR")
         
         self.btn_select.setObjectName("btn_select")
         self.btn_start.setObjectName("btn_start")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_translate.setObjectName("btn_translate")
+        self.btn_settings.setObjectName("btn_settings")
         self.btn_translate.setEnabled(False)
         self.btn_stop.setEnabled(False)
         self.preview_label.setAlignment(Qt.AlignCenter)
@@ -62,6 +65,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_start)
         layout.addWidget(self.btn_stop)
         layout.addWidget(self.btn_translate)
+        layout.addWidget(self.btn_settings)
         # Estilos
         self.setStyleSheet("""
             QMainWindow {
@@ -135,12 +139,17 @@ class MainWindow(QMainWindow):
                 color: #f1faef;
                 border: none;
             }
+            QPushButton#btn_settings:hover {
+                background-color: #f1f6fc;
+                border-color: #a8c5e5;
+            }
         """)
         
         self.btn_select.clicked.connect(self.on_select)
         self.btn_start.clicked.connect(self.on_start_overlay)
         self.btn_stop.clicked.connect(self.on_stop_overlay)
         self.btn_translate.clicked.connect(self.on_translate)
+        self.btn_settings.clicked.connect(self.open_settings)
         
     def on_select(self):
         dialog = WindowSelectorDialog(self)
@@ -196,9 +205,10 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
         print("Seleccion de ROI detenida.")
-        
-        PipelineCoordinator.stop_cycle(self.pipeline_coordinator)
-        print("Pipeline de procesamiento detenido.")
+
+        if self.pipeline_coordinator:
+            self.pipeline_coordinator.stop_cycle()
+            print("Pipeline de procesamiento detenido.")
         
     def on_translate(self):
         print("Iniciando traducción... (funcionalidad no implementada)")
@@ -212,11 +222,16 @@ class MainWindow(QMainWindow):
         self.btn_translate.setEnabled(False)
         self.overlay.set_mode("active") 
         if self.window_selected:
-            print(f"Creando PipelineCoordinator para ventana {self.window_selected}...")
+            print(f"Activando PipelineCoordinator para ventana {self.window_selected}...")
             try:
-                self.pipeline_coordinator = PipelineCoordinator(self.window_selected, True)
-                self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
+                if not self.pipeline_coordinator:
+                    self.pipeline_coordinator = PipelineCoordinator(self.window_selected, False, self)
+                    self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
+                else:
+                    self.pipeline_coordinator.hwnd = self.window_selected
+
                 self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
+                self.pipeline_coordinator.start_cycle(400)
             except Exception as e:
                 print(f"Error al crear PipelineCoordinator: {e}")
         
@@ -237,6 +252,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         stop_native_overlay_tracking()
+        if self.pipeline_coordinator:
+            self.pipeline_coordinator.shutdown()
         return super().closeEvent(event)
 
     def update_preview(self, hwnd):
@@ -270,3 +287,32 @@ class MainWindow(QMainWindow):
                     print("Se esta creando de nuevo?")
                     self.on_start_overlay()
         return super().keyPressEvent(event)
+    
+    def open_settings(self):
+        from app.ocr.engine import ocr_processor
+        current = getattr(ocr_processor, "current_device", "CPUExecutionProvider")
+        providers = getattr(ocr_processor, "get_selectable_providers", lambda: ("CPUExecutionProvider",))()
+        if current not in providers and providers:
+            current = providers[0]
+        
+        dialog = SettingsDialog(current, self, providers_override=providers)
+        dialog.settings_changed.connect(self.reinit_ocr_engine)
+        dialog.exec()
+        
+    def reinit_ocr_engine(self, new_provider):
+        from app.ocr.engine import ocr_processor
+        print(f"Reinicializando OCR Engine con nuevo provider: {new_provider}")
+
+        was_active = False
+        if self.pipeline_coordinator and self.pipeline_coordinator.active:
+            was_active = True
+            self.pipeline_coordinator.stop_cycle()
+
+        try:
+            ocr_processor.reinitialize(new_provider)
+            print(f"Provider activo: {ocr_processor.current_device}")
+        except Exception as e:
+            print(f"No se pudo aplicar provider {new_provider}: {e}")
+        finally:
+            if was_active:
+                self.pipeline_coordinator.start_cycle(400)

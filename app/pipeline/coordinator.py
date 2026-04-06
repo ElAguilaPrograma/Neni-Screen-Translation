@@ -1,32 +1,23 @@
 import numpy as np
 import xxhash
 from PySide6.QtCore import QObject, Signal, QTimer
-from app.ocr.engine import ocr_processor
 from app.capture.roi_capture import ROICapture
+from app.pipeline.ocr_worker import OCRWorker
 import re
-import functools
-
-def _measure_time(func):
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        import time
-        start = time.perf_counter()
-        result = func(self, *args, **kwargs)
-        end = time.perf_counter()
-        print(f"Time taken by {func.__name__}: {end - start:.4f} seconds")
-        return result
-    return wrapper
 
 class PipelineCoordinator(QObject):
     text_ready = Signal(int, str)
+    _non_ascii_re = re.compile(r"[^\x00-\x7F]+")
     
-    def __init__(self, hwnd, active = False):
-        super().__init__()
+    def __init__(self, hwnd, active=False, parent=None):
+        super().__init__(parent)
         self.hwnd = hwnd
         self.active_rois = {}
         self.last_frames = {}
         self.last_texts = {}
         self.active = active
+        self.debug_logging = False
+        self._poll_interval_ms = 400
 
         # Umbrales de deduplicacion para evitar OCR por jitter visual del capturador.
         self._min_changed_ratio = 0.01  # % de pixeles cuantizados deben cambiar.
@@ -35,11 +26,39 @@ class PipelineCoordinator(QObject):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.process_cycle)
-        self.timer.start(400)
+
+        self.ocr_worker = OCRWorker(max_pending_rois=8, parent=self)
+        self.ocr_worker.text_ready.connect(self._on_worker_text_ready)
+        self.ocr_worker.worker_error.connect(self._on_worker_error)
+        self.ocr_worker.start()
+
+        if self.active:
+            self.timer.start(self._poll_interval_ms)
+
+    def start_cycle(self, poll_interval_ms=400):
+        self._poll_interval_ms = int(poll_interval_ms)
+        self.active = True
+        if self.timer.isActive():
+            self.timer.setInterval(self._poll_interval_ms)
+            return
+        self.timer.start(self._poll_interval_ms)
         
     def stop_cycle(self):
+        if not self.timer:
+            return
         self.timer.stop()
+        self.ocr_worker.clear_pending()
         self.active = False
+
+    def shutdown(self):
+        self.stop_cycle()
+        if self.ocr_worker and self.ocr_worker.isRunning():
+            self.ocr_worker.stop()
+            self.ocr_worker.wait(1000)
+
+    def _log(self, message):
+        if self.debug_logging:
+            print(message)
         
     def update_rois(self, rois_list):
         self.active_rois = {roi.roi_id: roi for roi in rois_list}
@@ -50,13 +69,14 @@ class PipelineCoordinator(QObject):
             del self.last_frames[r_id]
             self.last_texts.pop(r_id, None)
 
+        self.ocr_worker.prune_pending(current_ids)
+
     def _build_signature(self, frame: np.ndarray) -> np.ndarray:
-        # BGR a grayscale con pesos fijos y reduccion para comparacion barata.
-        gray = (
-            0.114 * frame[:, :, 0].astype(np.float32)
-            + 0.587 * frame[:, :, 1].astype(np.float32)
-            + 0.299 * frame[:, :, 2].astype(np.float32)
-        ).astype(np.uint8)
+        # BGR a grayscale con aritmetica entera para reducir alocaciones/costo CPU.
+        b = frame[:, :, 0].astype(np.uint16)
+        g = frame[:, :, 1].astype(np.uint16)
+        r = frame[:, :, 2].astype(np.uint16)
+        gray = ((29 * b + 150 * g + 77 * r) >> 8).astype(np.uint8)
 
         h, w = gray.shape
         step_y = max(1, h // self._max_signature_side)
@@ -105,7 +125,7 @@ class PipelineCoordinator(QObject):
             
     def process_cycle(self):
         if not self.hwnd:
-            print("No se ha establecido un HWND válido para la captura.")
+            self._log("No se ha establecido un HWND valido para la captura.")
             return
         
         if not self.active:
@@ -115,37 +135,54 @@ class PipelineCoordinator(QObject):
         self.timer.stop()
         
         try:
+            window_frame = ROICapture.capture_window_frame(self.hwnd)
+            if window_frame is None:
+                self._log("No se pudo capturar el frame base de la ventana.")
+                return
+
             for roi_id, roi in self.active_rois.items():
                 try:
-                    frame = ROICapture.capture(self.hwnd, roi.x, roi.y, roi.w, roi.h)
+                    frame = ROICapture.crop_frame(
+                        self.hwnd,
+                        window_frame,
+                        roi.x,
+                        roi.y,
+                        roi.w,
+                        roi.h,
+                    )
                     
                     if frame is None:
-                        print(f"Error al capturar ROI {roi_id}.")
+                        self._log(f"Error al capturar ROI {roi_id}.")
                         continue
 
                     if not self._should_run_ocr(roi_id, frame):
-                        print(f"ROI {roi_id} sin cambios significativos, omitiendo OCR.")
+                        self._log(f"ROI {roi_id} sin cambios significativos, omitiendo OCR.")
                         continue
 
-                    self.run_ocr_pipeline(roi_id, frame)   
+                    self.ocr_worker.submit(roi_id, np.ascontiguousarray(frame))
                 except Exception as e:
                     print(f"Error en el ciclo de procesamiento para ROI {roi_id}: {e}")
         finally:
-            self.timer.start(400)
-    
-    @_measure_time            
-    def run_ocr_pipeline(self, roi_id, frame):
-        raw_text = ocr_processor.read(frame)
+            if self.active:
+                self.timer.start(self._poll_interval_ms)
+
+    def _on_worker_text_ready(self, roi_id, raw_text):
+        if not self.active:
+            return
+
         if raw_text.strip():
             normalized_text = self.normalize_text(raw_text)
             if self.last_texts.get(roi_id) == normalized_text:
                 return
             self.last_texts[roi_id] = normalized_text
             self.text_ready.emit(roi_id, normalized_text)
+
+    def _on_worker_error(self, message):
+        print(message)
             
     def normalize_text(self, text):
         text = text.replace("\n", " ")
-        text = re.sub(r'[^\x00-\x7F]+', ' ', text) # Remover no-ASCII si es inglés puro
+        text = self._non_ascii_re.sub(" ", text)  # Remover no-ASCII si es ingles puro
         text = " ".join(text.split())
         return text.strip()
     
