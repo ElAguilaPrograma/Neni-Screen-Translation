@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor
 from app import settings as app_settings
+from app.ui.theme import get_settings_dialog_stylesheet, resolve_dark_mode
 
 # Aqui manejare las opciones de configuracion globales, como el OCR engine, modelo de traducción,
 # usar o no GPU, color de fondo del overlay, opacidad del overlay, etc.
@@ -17,6 +18,7 @@ class SettingsDialog(QDialog):
     overlay_text_style_changed = Signal(dict)
     pipeline_settings_changed = Signal(dict)
     translation_settings_changed = Signal(dict)
+    theme_mode_changed = Signal(str)
     
     def __init__(
         self,
@@ -26,6 +28,7 @@ class SettingsDialog(QDialog):
         initial_overlay_style=None,
         initial_pipeline_settings=None,
         initial_translation_settings=None,
+        initial_theme_mode=None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Configuración")
@@ -40,6 +43,8 @@ class SettingsDialog(QDialog):
             )
         self.pipeline_settings = app_settings.normalize_pipeline_settings(initial_pipeline_settings)
         self.translation_settings = app_settings.normalize_translation_settings(initial_translation_settings)
+        self.theme_mode = app_settings.normalize_theme_mode(initial_theme_mode or app_settings.get_theme_mode())
+        self._is_dark_theme = resolve_dark_mode(self.theme_mode)
 
         bg_rgba = self.overlay_style.get("background_rgba", app_settings.DEFAULT_OVERLAY_TEXT_STYLE["background_rgba"])
         if len(bg_rgba) == 4:
@@ -53,6 +58,8 @@ class SettingsDialog(QDialog):
         self._is_ready = False
         
         self.init_ui()
+        self._apply_dialog_theme()
+        self._refresh_theme_controls()
         self.load_providers()
         self._sync_overlay_controls_from_style()
         self._sync_pipeline_controls_from_settings()
@@ -78,20 +85,38 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
+
+        appearance_header = QLabel("Apariencia")
+        appearance_header.setObjectName("section_header")
+        layout.addWidget(appearance_header)
+
+        appearance_card = QFrame()
+        appearance_card.setObjectName("section_card")
+        appearance_layout = QVBoxLayout(appearance_card)
+        appearance_layout.setSpacing(8)
+
+        self.label_theme_mode = QLabel("")
+        self.label_theme_mode.setObjectName("theme_status")
+        appearance_layout.addWidget(self.label_theme_mode)
+
+        self.btn_toggle_theme = QPushButton("")
+        self.btn_toggle_theme.setObjectName("btn_theme_toggle")
+        appearance_layout.addWidget(self.btn_toggle_theme)
+
+        appearance_hint = QLabel("Modo auto sigue la preferencia de Windows en tiempo real.")
+        appearance_hint.setWordWrap(True)
+        appearance_hint.setObjectName("section_hint")
+        appearance_layout.addWidget(appearance_hint)
+
+        layout.addWidget(appearance_card)
         
         # Sección de aceleración
         header = QLabel("Aceleración de Hardware")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        header.setObjectName("section_header")
         layout.addWidget(header)
         
         card = QFrame()
-        card.setStyleSheet("""
-            QFrame {
-                background-color: white;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-            }
-        """)
+        card.setObjectName("section_card")
         card_layout = QVBoxLayout(card)
 
         # Selector de Dispositivo
@@ -112,17 +137,11 @@ class SettingsDialog(QDialog):
 
         # Sección visual de traducción sobre ROI
         overlay_header = QLabel("Texto de Traducción en Overlay")
-        overlay_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        overlay_header.setObjectName("section_header")
         layout.addWidget(overlay_header)
 
         overlay_card = QFrame()
-        overlay_card.setStyleSheet("""
-            QFrame {
-                background-color: white;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-            }
-        """)
+        overlay_card.setObjectName("section_card")
         overlay_layout = QVBoxLayout(overlay_card)
         overlay_layout.setSpacing(10)
 
@@ -163,25 +182,17 @@ class SettingsDialog(QDialog):
 
         self.overlay_hint = QLabel("Los cambios se aplican en tiempo real al overlay.")
         self.overlay_hint.setWordWrap(True)
-        self.overlay_hint.setStyleSheet("color: #5f6b76; font-size: 12px;")
+        self.overlay_hint.setObjectName("section_hint")
         overlay_layout.addWidget(self.overlay_hint)
 
         layout.addWidget(overlay_card)
 
         pipeline_header = QLabel("Pipeline OCR")
-        pipeline_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        pipeline_header.setObjectName("section_header")
         layout.addWidget(pipeline_header)
 
         pipeline_card = QFrame()
-        pipeline_card.setStyleSheet(
-            """
-            QFrame {
-                background-color: white;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-            }
-            """
-        )
+        pipeline_card.setObjectName("section_card")
         pipeline_layout = QVBoxLayout(pipeline_card)
         pipeline_layout.setSpacing(10)
 
@@ -245,25 +256,17 @@ class SettingsDialog(QDialog):
 
         pipeline_hint = QLabel("Ajustes de rendimiento OCR: aplicar con cuidado para evitar latencia o ruido.")
         pipeline_hint.setWordWrap(True)
-        pipeline_hint.setStyleSheet("color: #5f6b76; font-size: 12px;")
+        pipeline_hint.setObjectName("section_hint")
         pipeline_layout.addWidget(pipeline_hint)
 
         layout.addWidget(pipeline_card)
 
         translation_header = QLabel("Traducción")
-        translation_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        translation_header.setObjectName("section_header")
         layout.addWidget(translation_header)
 
         translation_card = QFrame()
-        translation_card.setStyleSheet(
-            """
-            QFrame {
-                background-color: white;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-            }
-            """
-        )
+        translation_card.setObjectName("section_card")
         translation_layout = QVBoxLayout(translation_card)
         translation_layout.setSpacing(10)
 
@@ -303,7 +306,7 @@ class SettingsDialog(QDialog):
 
         translation_hint = QLabel("Si cambias idioma, se recargará el motor de traducción al aplicar ajustes.")
         translation_hint.setWordWrap(True)
-        translation_hint.setStyleSheet("color: #5f6b76; font-size: 12px;")
+        translation_hint.setObjectName("section_hint")
         translation_layout.addWidget(translation_hint)
 
         layout.addWidget(translation_card)
@@ -318,117 +321,6 @@ class SettingsDialog(QDialog):
         self.btn_apply = QPushButton("Aplicar Cambios")
         self.btn_apply.setObjectName("btn_save")
 
-        # Estilos del dialogo + botones (evita texto invisible en temas oscuros).
-        self.setStyleSheet("""
-            QDialog {
-                background: #f5f5f5;
-            }
-            QScrollArea {
-                border: none;
-                background: #f5f5f5;
-            }
-            QWidget#settings_scroll_content {
-                background: #f5f5f5;
-            }
-            QLabel {
-                color: #222;
-                background: transparent;
-            }
-            QComboBox {
-                background: #ffffff;
-                color: #222;
-                border: 1px solid #c8c8c8;
-                border-radius: 6px;
-                padding: 5px 8px;
-                min-height: 28px;
-            }
-            QComboBox QAbstractItemView {
-                background: #ffffff;
-                color: #222;
-                selection-background-color: #dbeeff;
-                selection-color: #111;
-                border: 1px solid #c8c8c8;
-            }
-            QPushButton {
-                padding: 8px 15px;
-                border-radius: 5px;
-                border: 1px solid #ccc;
-                background: #f9f9f9;
-                color: #222;
-            }
-            QPushButton#btn_save {
-                background: #0078d4;
-                color: white;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton#btn_color {
-                color: #111;
-                font-weight: 600;
-            }
-            QPushButton#btn_save:hover { background: #005a9e; }
-            QSpinBox {
-                background: #ffffff;
-                color: #222;
-                border: 1px solid #c8c8c8;
-                border-radius: 6px;
-                padding: 5px 8px;
-                min-height: 28px;
-            }
-            QDoubleSpinBox {
-                background: #ffffff;
-                color: #222;
-                border: 1px solid #c8c8c8;
-                border-radius: 6px;
-                padding: 5px 8px;
-                min-height: 28px;
-            }
-            QLineEdit {
-                background: #ffffff;
-                color: #222;
-                border: 1px solid #c8c8c8;
-                border-radius: 6px;
-                padding: 5px 8px;
-                min-height: 28px;
-            }
-            QCheckBox {
-                color: #222;
-            }
-            QScrollBar:vertical {
-                background: #ececec;
-                width: 10px;
-                margin: 0;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
-                background: #b8b8b8;
-                min-height: 24px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #979797;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical,
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-                height: 0;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #c8c8c8;
-                height: 6px;
-                border-radius: 3px;
-                background: #e8e8e8;
-            }
-            QSlider::handle:horizontal {
-                width: 14px;
-                margin: -5px 0;
-                border-radius: 7px;
-                background: #0078d4;
-            }
-        """)
-
         buttons_layout.addWidget(self.btn_cancel)
         buttons_layout.addWidget(self.btn_apply)
         root_layout.addLayout(buttons_layout)
@@ -436,9 +328,44 @@ class SettingsDialog(QDialog):
         self.spin_font_size.valueChanged.connect(self._on_overlay_control_changed)
         self.slider_bg_opacity.valueChanged.connect(self._on_overlay_control_changed)
         self.btn_bg_color.clicked.connect(self._on_pick_background_color)
+        self.btn_toggle_theme.clicked.connect(self._on_toggle_theme)
         
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_apply.clicked.connect(self.accept_settings)
+
+    def _next_theme_mode(self):
+        order = ("auto", "dark", "light")
+        current = app_settings.normalize_theme_mode(self.theme_mode)
+        idx = order.index(current)
+        return order[(idx + 1) % len(order)]
+
+    def _theme_mode_label(self):
+        labels = {
+            "auto": "Sistema (Windows)",
+            "dark": "Oscuro (forzado)",
+            "light": "Claro (forzado)",
+        }
+        return labels.get(self.theme_mode, "Sistema (Windows)")
+
+    def _refresh_theme_controls(self):
+        self.label_theme_mode.setText(f"Tema actual: {self._theme_mode_label()}")
+        next_mode = self._next_theme_mode()
+        next_label = {
+            "auto": "Sistema",
+            "dark": "Oscuro",
+            "light": "Claro",
+        }.get(next_mode, "Sistema")
+        self.btn_toggle_theme.setText(f"Cambiar a {next_label}")
+
+    def _apply_dialog_theme(self):
+        self._is_dark_theme = resolve_dark_mode(self.theme_mode)
+        self.setStyleSheet(get_settings_dialog_stylesheet(self._is_dark_theme))
+        self._update_color_button()
+
+    def _on_toggle_theme(self):
+        self.theme_mode = self._next_theme_mode()
+        self._apply_dialog_theme()
+        self._refresh_theme_controls()
 
     def _sync_overlay_controls_from_style(self):
         font_min, font_max = app_settings.OVERLAY_FONT_SIZE_RANGE
@@ -464,11 +391,13 @@ class SettingsDialog(QDialog):
 
     def _update_color_button(self):
         preview_color = self._bg_color.name()
+        border_color = "#4a4a4a" if self._is_dark_theme else "#c8c8c8"
+        text_color = "#f0f0f0" if self._is_dark_theme else "#111"
         self.btn_bg_color.setStyleSheet(
             "QPushButton#btn_color {"
             f"background: {preview_color};"
-            "border: 1px solid #c8c8c8;"
-            "color: #111;"
+            f"border: 1px solid {border_color};"
+            f"color: {text_color};"
             "font-weight: 600;"
             "}"
         )
@@ -569,13 +498,13 @@ class SettingsDialog(QDialog):
             self.label_status.setText(
                 "Aceleración disponible: " + ", ".join(options)
             )
-            self.label_status.setStyleSheet("color: #1a6b1a;")
+            self.label_status.setStyleSheet("color: #56c056;" if self._is_dark_theme else "color: #1a6b1a;")
             return
 
         self.label_status.setText(
             "Solo CPU disponible. Instala un runtime con GPU para habilitar más opciones."
         )
-        self.label_status.setStyleSheet("color: #8a6d00;")
+        self.label_status.setStyleSheet("color: #d9be63;" if self._is_dark_theme else "color: #8a6d00;")
 
     def accept_settings(self):
         selected_provider = self.combo_devices.currentData()
@@ -583,6 +512,7 @@ class SettingsDialog(QDialog):
         self.overlay_style = self._compose_overlay_style()
         self.pipeline_settings = self._compose_pipeline_settings()
         self.translation_settings = self._compose_translation_settings()
+        self.theme_mode_changed.emit(self.theme_mode)
         self.pipeline_settings_changed.emit(dict(self.pipeline_settings))
         self.translation_settings_changed.emit(dict(self.translation_settings))
         self.accept()

@@ -1,6 +1,6 @@
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 
 from app.ui.window_selector import WindowSelectorDialog
 from app.utils.win32_utils import (
@@ -9,6 +9,12 @@ from app.utils.win32_utils import (
     stop_native_overlay_tracking,
 )
 from app.ui.overlay import WindowOverlay
+from app.ui.dialog import AppDialog
+from app.ui.theme import (
+    get_main_window_stylesheet,
+    get_preview_label_stylesheet,
+    resolve_dark_mode,
+)
 from app.pipeline.coordinator import PipelineCoordinator
 from app.ui.settings_gui import SettingsDialog
 from app import settings as app_settings
@@ -23,6 +29,11 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.overlay_text_style = app_settings.get_overlay_text_style()
+        self._theme_mode = app_settings.get_theme_mode()
+        self._is_dark_theme = resolve_dark_mode(self._theme_mode)
+        self._applying_theme = False
+        self._main_stylesheet_cache = None
+        self._preview_stylesheet_cache = None
 
         self.setWindowTitle("Screen Translator")
         self.setFixedSize(*app_settings.UI_SIZES["main_window"])
@@ -43,7 +54,7 @@ class MainWindow(QMainWindow):
         self.btn_translate = QPushButton("Iniciar Traducción")
         self.btn_stop_translation = QPushButton("Detener Traducción")
         self.btn_force_detection = QPushButton("Forza deteccion y traducción")
-        self.btn_settings = QPushButton("Abrir Ajustes de OCR")
+        self.btn_settings = QPushButton("Abrir Configuración")
         
         self.btn_select.setObjectName("btn_select")
         self.btn_start.setObjectName("btn_start")
@@ -58,16 +69,6 @@ class MainWindow(QMainWindow):
         self.btn_stop_translation.setEnabled(False)
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(200)
-        self.preview_label.setStyleSheet(
-            """
-            QLabel {
-                background-color: #ffffff;
-                border: 1px dashed #cfcfcf;
-                border-radius: 8px;
-                color: #777;
-            }
-            """
-        )
         
         layout.addWidget(self.btn_select)
         layout.addWidget(self.preview_label)
@@ -77,112 +78,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_stop_translation)
         layout.addWidget(self.btn_force_detection)
         layout.addWidget(self.btn_settings)
-        # Estilos
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f5f5f5; /* Fondo gris muy claro */
-            }
-            QPushButton {
-                background-color: #ffffff;   /* Botones blancos */
-                border: 1px solid #dcdcdc;  /* Borde gris fino */
-                border-radius: 8px;          /* Esquinas redondeadas */
-                padding: 10px;               /* Espacio interno para que el botón sea alto */
-                font-size: 14px;
-                color: #333;                 /* Texto gris oscuro */
-            }
-            QPushButton:hover {
-                background-color: #eeeeee;   /* Color al pasar el ratón por encima */
-            }
-            QPushButton:disabled {
-                background-color: #f0f0f0;
-                border: 1px solid #d9d9d9;
-                color: #9a9a9a;
-            }
-            /* Estilo específico para el botón que llamamos 'btn_start' */
-            QPushButton#btn_start {
-                background-color: #0078d4;   /* Azul estilo Windows/Mac */
-                color: white;                /* Texto blanco */
-                font-weight: bold;
-                border: none;                /* Sin borde para que se vea más limpio */
-            }
-            QPushButton#btn_start:hover {
-                background-color: #005a9e;   /* Azul más oscuro al pasar el ratón */
-            }
-            QPushButton#btn_start:disabled {
-                background-color: #86b7e3;
-                color: #eef5fb;
-                border: none;
-            }
-            QPushButton#btn_select:hover {
-                background-color: #e8f1fb;   /* Hover suave para selección de ventana */
-                border-color: #9dc3e6;
-            }
-            QPushButton#btn_select:disabled {
-                background-color: #f0f0f0;
-                border-color: #d9d9d9;
-                color: #9a9a9a;
-            }
-            QPushButton#btn_stop {
-                background-color: #d13438;   /* Rojo para detener selección */
-                color: white;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton#btn_stop:hover {
-                background-color: #a4262c;   /* Rojo más oscuro en hover */
-            }
-            QPushButton#btn_stop:disabled {
-                background-color: #de8f91;
-                color: #fdf3f3;
-                border: none;
-            }
-            QPushButton#btn_translate {
-                background-color: #107c10;   /* Verde para iniciar traducción */
-                color: white;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton#btn_translate:hover {
-                background-color: #0b5a0b;   /* Verde más oscuro en hover */
-            }
-            QPushButton#btn_translate:disabled {
-                background-color: #7eb57e;
-                color: #f1faef;
-                border: none;
-            }
-            QPushButton#btn_force_detection {
-                background-color: #ff8c00;
-                color: white;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton#btn_force_detection:hover {
-                background-color: #cf7000;
-            }
-            QPushButton#btn_force_detection:disabled {
-                background-color: #f2be83;
-                color: #fff8ef;
-                border: none;
-            }
-            QPushButton#btn_settings:hover {
-                background-color: #f1f6fc;
-                border-color: #a8c5e5;
-            }
-            QPushButton#btn_stop_translation {
-                background-color: #8b5cf6;   /* Morado principal */
-                color: white;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton#btn_stop_translation:hover {
-                background-color: #7c3aed;   /* Morado más intenso */
-            }
-            QPushButton#btn_stop_translation:disabled {
-                background-color: #c4b5fd;   /* Morado suave deshabilitado */
-                color: #f5f3ff;
-                border: none;
-            }
-        """)
+        self._apply_theme()
         
         self.btn_select.clicked.connect(self.on_select)
         self.btn_start.clicked.connect(self.on_start_overlay)
@@ -205,10 +101,12 @@ class MainWindow(QMainWindow):
             else:
                 print("No se seleccionó ninguna ventana.")
                 self.preview_label.setText("No se seleccionó ninguna ventana")
+                self._show_dialog("Aviso", "No se selecciono ninguna ventana objetivo.")
         
     def on_start_overlay(self):
         if not self.window_selected:
             print("No hay ventana seleccionada para superponer.")
+            self._show_dialog("Aviso", "Selecciona una ventana antes de definir regiones de interes.")
             return
         
         if not self.overlay:
@@ -260,6 +158,7 @@ class MainWindow(QMainWindow):
         print("Iniciando traducción...")
         if not self.overlay or not hasattr(self.overlay, "scene") or not self.overlay.scene.rois:
             print("No hay ROIs definidas para procesar OCR.")
+            self._show_dialog("Aviso", "No hay regiones de interes definidas para iniciar la traduccion.")
             return
 
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
@@ -293,6 +192,7 @@ class MainWindow(QMainWindow):
                 self._refresh_action_buttons()
             except Exception as e:
                 print(f"Error al crear PipelineCoordinator: {e}")
+                self._show_dialog("Error", f"No se pudo iniciar la traduccion.\n\nDetalle: {e}")
 
     def on_stop_translation(self):
         if self.pipeline_coordinator:
@@ -307,6 +207,10 @@ class MainWindow(QMainWindow):
     def on_force_detection(self):
         if not self.overlay or self.overlay.mode != "active" or not self.has_overlay_rois():
             print("Forzar detección no disponible: se requiere overlay activo con ROI definidas.")
+            self._show_dialog(
+                "Aviso",
+                "Forzar deteccion requiere overlay activo y al menos una ROI definida.",
+            )
             self._refresh_action_buttons()
             return
 
@@ -316,6 +220,7 @@ class MainWindow(QMainWindow):
                 self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
             except Exception as e:
                 print(f"No se pudo inicializar PipelineCoordinator para forzar detección: {e}")
+                self._show_dialog("Error", f"No se pudo forzar deteccion.\n\nDetalle: {e}")
                 return
 
         self.pipeline_coordinator.hwnd = self.window_selected
@@ -326,6 +231,10 @@ class MainWindow(QMainWindow):
             print(f"Detección y traducción forzadas para {dispatched} ROI(s).")
         else:
             print("No se pudo forzar detección: no hubo ROIs válidas o falló la captura.")
+            self._show_dialog(
+                "Aviso",
+                "No se pudo forzar deteccion porque no hubo ROIs validas o fallo la captura.",
+            )
             
     def on_text_detected(self, roi_id, text):
         print("------------------------------------------")
@@ -373,6 +282,7 @@ class MainWindow(QMainWindow):
         if pixmap is None or pixmap.isNull():
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.setText("No se pudo capturar la ventana")
+            self._show_dialog("Aviso", "No se pudo capturar la ventana seleccionada.")
             return
 
         self.preview_label.setText("")
@@ -399,11 +309,13 @@ class MainWindow(QMainWindow):
             initial_overlay_style=dict(self.overlay_text_style),
             initial_pipeline_settings=app_settings.get_pipeline_settings(),
             initial_translation_settings=app_settings.get_translation_settings(),
+            initial_theme_mode=app_settings.get_theme_mode(),
         )
         dialog.settings_changed.connect(self.reinit_ocr_engine)
         dialog.overlay_text_style_changed.connect(self._apply_overlay_text_style)
         dialog.pipeline_settings_changed.connect(self._apply_pipeline_settings)
         dialog.translation_settings_changed.connect(self._apply_translation_settings)
+        dialog.theme_mode_changed.connect(self._apply_theme_settings)
 
         if dialog.exec() == QDialog.Accepted:
             self.overlay_text_style = dialog.get_overlay_text_style()
@@ -457,6 +369,39 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             print(f"No se pudo recargar el traductor con nueva configuracion: {e}")
+
+    def _apply_theme_settings(self, theme_mode):
+        self._theme_mode = app_settings.set_theme_mode(theme_mode)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        if self._applying_theme:
+            return
+
+        is_dark = resolve_dark_mode(self._theme_mode)
+        main_stylesheet = get_main_window_stylesheet(is_dark)
+        preview_stylesheet = get_preview_label_stylesheet(is_dark)
+
+        if (
+            self._is_dark_theme == is_dark
+            and self._main_stylesheet_cache == main_stylesheet
+            and self._preview_stylesheet_cache == preview_stylesheet
+        ):
+            return
+
+        self._applying_theme = True
+        try:
+            self._is_dark_theme = is_dark
+
+            if self._main_stylesheet_cache != main_stylesheet:
+                self.setStyleSheet(main_stylesheet)
+                self._main_stylesheet_cache = main_stylesheet
+
+            if hasattr(self, "preview_label") and self._preview_stylesheet_cache != preview_stylesheet:
+                self.preview_label.setStyleSheet(preview_stylesheet)
+                self._preview_stylesheet_cache = preview_stylesheet
+        finally:
+            self._applying_theme = False
         
     def reinit_ocr_engine(self, new_provider):
         from app.ocr.engine import ocr_processor
@@ -476,3 +421,17 @@ class MainWindow(QMainWindow):
         finally:
             if was_active:
                 self.pipeline_coordinator.start_cycle(app_settings.get_pipeline_poll_interval_ms())
+
+    def _show_dialog(self, title, message):
+        notice = AppDialog(title, message, self)
+        notice.exec()
+
+    def changeEvent(self, event):
+        if (
+            not self._applying_theme
+            and event.type() in (QEvent.ApplicationPaletteChange, QEvent.PaletteChange)
+        ):
+            if app_settings.get_theme_mode() == "auto":
+                self._theme_mode = "auto"
+                self._apply_theme()
+        super().changeEvent(event)

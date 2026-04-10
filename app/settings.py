@@ -47,6 +47,10 @@ TRANSLATION_SETTINGS = {
     "auto_install_package": True,
 }
 
+THEME_SETTINGS = {
+    "mode": "auto",
+}
+
 OCR_SETTINGS = {
     "provider_priority": OCR_PROVIDER_PRIORITY,
     "provider_params": {
@@ -309,6 +313,26 @@ def set_translation_settings(settings):
     return dict(normalized)
 
 
+def normalize_theme_mode(mode):
+    normalized = str(mode or "auto").strip().lower()
+    if normalized not in ("auto", "light", "dark"):
+        normalized = "auto"
+    return normalized
+
+
+def get_theme_mode():
+    with _settings_lock:
+        mode = THEME_SETTINGS.get("mode", "auto")
+    return normalize_theme_mode(mode)
+
+
+def set_theme_mode(mode):
+    normalized = normalize_theme_mode(mode)
+    with _settings_lock:
+        THEME_SETTINGS["mode"] = normalized
+    return normalized
+
+
 def get_ocr_provider_priority():
     configured = OCR_SETTINGS.get("provider_priority", OCR_PROVIDER_PRIORITY)
     if not isinstance(configured, (list, tuple)):
@@ -435,6 +459,10 @@ def load_settings_from_disk():
     if isinstance(translation_overrides, dict):
         set_translation_settings(translation_overrides)
 
+    theme_overrides = payload.get("theme", {})
+    if isinstance(theme_overrides, dict):
+        set_theme_mode(theme_overrides.get("mode", "auto"))
+
     ocr_overrides = payload.get("ocr", {})
     if isinstance(ocr_overrides, dict):
         with _settings_lock:
@@ -451,6 +479,7 @@ def save_settings_to_disk():
             "preferred_ocr_provider": get_preferred_ocr_provider(),
             "pipeline": deepcopy(PIPELINE_SETTINGS),
             "translation": deepcopy(TRANSLATION_SETTINGS),
+            "theme": deepcopy(THEME_SETTINGS),
             "ocr": {
                 "provider_priority": list(get_ocr_provider_priority()),
             },
