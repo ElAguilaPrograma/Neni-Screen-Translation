@@ -5,4 +5,7 @@ xxhash
 Pillow
 numpy
 rapidocr 
-onnxruntime
+onnxruntime-gpu; platform_system == "Windows"
+onnxruntime; platform_system != "Windows"
+ctranslate2
+argostranslate

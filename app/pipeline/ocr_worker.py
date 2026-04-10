@@ -5,7 +5,6 @@ from PySide6.QtCore import QThread, Signal
 
 from app.ocr.engine import ocr_processor
 
-
 class OCRWorker(QThread):
     text_ready = Signal(int, str)
     worker_error = Signal(str)

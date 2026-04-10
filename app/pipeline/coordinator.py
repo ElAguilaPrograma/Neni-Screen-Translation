@@ -3,9 +3,12 @@ import xxhash
 from PySide6.QtCore import QObject, Signal, QTimer
 from app.capture.roi_capture import ROICapture
 from app.pipeline.ocr_worker import OCRWorker
+from app.translation.translator import translator
 import re
 
 class PipelineCoordinator(QObject):
+    text_detected = Signal(int, str)
+    text_normalized = Signal(int, str)
     text_ready = Signal(int, str)
     _non_ascii_re = re.compile(r"[^\x00-\x7F]+")
     
@@ -23,6 +26,7 @@ class PipelineCoordinator(QObject):
         self._min_changed_ratio = 0.01  # % de pixeles cuantizados deben cambiar.
         self._quant_step = 3  # 8 niveles por canal en escala de grises (0-255 >> 3)
         self._max_signature_side = 96
+        self._forced_roi_ids = set()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.process_cycle)
@@ -48,6 +52,7 @@ class PipelineCoordinator(QObject):
             return
         self.timer.stop()
         self.ocr_worker.clear_pending()
+        self._forced_roi_ids.clear()
         self.active = False
 
     def shutdown(self):
@@ -70,6 +75,7 @@ class PipelineCoordinator(QObject):
             self.last_texts.pop(r_id, None)
 
         self.ocr_worker.prune_pending(current_ids)
+        self._forced_roi_ids.intersection_update(current_ids)
 
     def _build_signature(self, frame: np.ndarray) -> np.ndarray:
         # BGR a grayscale con aritmetica entera para reducir alocaciones/costo CPU.
@@ -123,59 +129,93 @@ class PipelineCoordinator(QObject):
         }
         return changed_ratio >= self._min_changed_ratio
             
-    def process_cycle(self):
+    def _capture_and_dispatch(self, force=False):
         if not self.hwnd:
             self._log("No se ha establecido un HWND valido para la captura.")
-            return
-        
+            return 0
+
+        if not self.active_rois:
+            self._log("No hay ROIs activas para procesar.")
+            return 0
+
+        window_frame = ROICapture.capture_window_frame(self.hwnd)
+        if window_frame is None:
+            self._log("No se pudo capturar el frame base de la ventana.")
+            return 0
+
+        dispatched = 0
+        for roi_id, roi in self.active_rois.items():
+            try:
+                frame = ROICapture.crop_frame(
+                    self.hwnd,
+                    window_frame,
+                    roi.x,
+                    roi.y,
+                    roi.w,
+                    roi.h,
+                )
+
+                if frame is None:
+                    self._log(f"Error al capturar ROI {roi_id}.")
+                    continue
+
+                if not force and not self._should_run_ocr(roi_id, frame):
+                    self._log(f"ROI {roi_id} sin cambios significativos, omitiendo OCR.")
+                    continue
+
+                if force:
+                    self._forced_roi_ids.add(roi_id)
+                self.ocr_worker.submit(roi_id, np.ascontiguousarray(frame))
+                dispatched += 1
+            except Exception as e:
+                print(f"Error en el ciclo de procesamiento para ROI {roi_id}: {e}")
+
+        return dispatched
+
+    def process_cycle(self):
         if not self.active:
             self.stop_cycle()
             return
-        
+
         self.timer.stop()
-        
         try:
-            window_frame = ROICapture.capture_window_frame(self.hwnd)
-            if window_frame is None:
-                self._log("No se pudo capturar el frame base de la ventana.")
-                return
-
-            for roi_id, roi in self.active_rois.items():
-                try:
-                    frame = ROICapture.crop_frame(
-                        self.hwnd,
-                        window_frame,
-                        roi.x,
-                        roi.y,
-                        roi.w,
-                        roi.h,
-                    )
-                    
-                    if frame is None:
-                        self._log(f"Error al capturar ROI {roi_id}.")
-                        continue
-
-                    if not self._should_run_ocr(roi_id, frame):
-                        self._log(f"ROI {roi_id} sin cambios significativos, omitiendo OCR.")
-                        continue
-
-                    self.ocr_worker.submit(roi_id, np.ascontiguousarray(frame))
-                except Exception as e:
-                    print(f"Error en el ciclo de procesamiento para ROI {roi_id}: {e}")
+            self._capture_and_dispatch(force=False)
         finally:
             if self.active:
                 self.timer.start(self._poll_interval_ms)
 
+    def force_detection(self):
+        """Dispara una deteccion+traduccion inmediata para todas las ROI activas."""
+        return self._capture_and_dispatch(force=True)
+
     def _on_worker_text_ready(self, roi_id, raw_text):
-        if not self.active:
+        forced = roi_id in self._forced_roi_ids
+        if forced:
+            self._forced_roi_ids.discard(roi_id)
+
+        if not self.active and not forced:
             return
 
-        if raw_text.strip():
-            normalized_text = self.normalize_text(raw_text)
-            if self.last_texts.get(roi_id) == normalized_text:
-                return
-            self.last_texts[roi_id] = normalized_text
-            self.text_ready.emit(roi_id, normalized_text)
+        if not raw_text.strip():
+            return
+
+        normalized_text = self.normalize_text(raw_text)
+        if not normalized_text:
+            return
+
+        if not forced and self.last_texts.get(roi_id) == normalized_text:
+            return
+        self.last_texts[roi_id] = normalized_text
+
+        try:
+            translated_text = translator.translate(normalized_text)
+        except Exception as e:
+            print(f"Error al traducir ROI {roi_id}: {e}")
+            translated_text = normalized_text
+
+        self.text_detected.emit(roi_id, raw_text)
+        self.text_normalized.emit(roi_id, normalized_text)
+        self.text_ready.emit(roi_id, translated_text)
 
     def _on_worker_error(self, message):
         print(message)

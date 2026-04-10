@@ -56,6 +56,7 @@ class WindowOverlay(QWidget):
             self.layout.addWidget(self.view)
             
         if mode == "edit":
+            self.scene.clear_roi_texts()
             self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
             self.view.setAttribute(Qt.WA_TransparentForMouseEvents, False)
             self.view.viewport().setAttribute(Qt.WA_TransparentForMouseEvents, False)
@@ -78,6 +79,7 @@ class WindowOverlay(QWidget):
                 print("No se definieron regiones de interés (ROI). Cambiando a modo edit.")
                 self.set_mode("edit")
                 return
+            self.scene.clear_roi_texts()
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             self.view.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             self.view.viewport().setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -93,6 +95,24 @@ class WindowOverlay(QWidget):
         
         if mode != None:    
             self.show()
+
+        if hasattr(self, "scene"):
+            self.rois_has_items.emit(len(self.scene.rois) > 0)
+
+    def update_roi_text(self, roi_id, text):
+        if not hasattr(self, "scene"):
+            return
+        self.scene.update_roi_text(roi_id, text)
+
+    def configure_roi_text_style(self, **style_kwargs):
+        if not hasattr(self, "scene"):
+            return
+        self.scene.configure_text_style(**style_kwargs)
+
+    def clear_roi_texts(self):
+        if not hasattr(self, "scene"):
+            return
+        self.scene.clear_roi_texts()
 
     def _sync_scene_rect(self):
         viewport_rect = self.view.viewport().rect()
@@ -152,5 +172,5 @@ class WindowOverlay(QWidget):
         # Texto de instrucciones
         if self.mode == "edit":
             painter.setPen(QColor(255, 255, 255))
-            painter.drawText(self.rect().adjusted(0, 0, 0, -20), Qt.AlignCenter, "Presiona Enter para confirmar la selección")
-            painter.drawText(self.rect().adjusted(0, 20, 0, 0), Qt.AlignCenter, "Presiona Escape para salir de la selección")
+            painter.drawText(self.rect().adjusted(0, 0, 0, -20), Qt.AlignCenter, "Dibujar regiones de interés (ROI) con el mouse")
+            painter.drawText(self.rect().adjusted(0, 20, 0, 0), Qt.AlignCenter, "Clic derecho sobre una ROI para eliminar la ROI")

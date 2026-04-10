@@ -21,6 +21,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.overlay_text_style = {
+            "font_size_px": 16,
+            "background_rgba": (12, 18, 32, 212),
+        }
+
         self.setWindowTitle("Screen Translator")
         self.setFixedSize(700, 600)
         
@@ -38,14 +43,17 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel("La ventana seleccionada aparecerá aquí")
         self.btn_stop = QPushButton("Detener Selección")
         self.btn_translate = QPushButton("Iniciar Traducción")
+        self.btn_force_detection = QPushButton("Forza deteccion y traducción")
         self.btn_settings = QPushButton("Abrir Ajustes de OCR")
         
         self.btn_select.setObjectName("btn_select")
         self.btn_start.setObjectName("btn_start")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_translate.setObjectName("btn_translate")
+        self.btn_force_detection.setObjectName("btn_force_detection")
         self.btn_settings.setObjectName("btn_settings")
         self.btn_translate.setEnabled(False)
+        self.btn_force_detection.setEnabled(False)
         self.btn_stop.setEnabled(False)
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(200)
@@ -65,6 +73,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_start)
         layout.addWidget(self.btn_stop)
         layout.addWidget(self.btn_translate)
+        layout.addWidget(self.btn_force_detection)
         layout.addWidget(self.btn_settings)
         # Estilos
         self.setStyleSheet("""
@@ -139,6 +148,20 @@ class MainWindow(QMainWindow):
                 color: #f1faef;
                 border: none;
             }
+            QPushButton#btn_force_detection {
+                background-color: #ff8c00;
+                color: white;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton#btn_force_detection:hover {
+                background-color: #cf7000;
+            }
+            QPushButton#btn_force_detection:disabled {
+                background-color: #f2be83;
+                color: #fff8ef;
+                border: none;
+            }
             QPushButton#btn_settings:hover {
                 background-color: #f1f6fc;
                 border-color: #a8c5e5;
@@ -149,6 +172,7 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.on_start_overlay)
         self.btn_stop.clicked.connect(self.on_stop_overlay)
         self.btn_translate.clicked.connect(self.on_translate)
+        self.btn_force_detection.clicked.connect(self.on_force_detection)
         self.btn_settings.clicked.connect(self.open_settings)
         
     def on_select(self):
@@ -175,6 +199,8 @@ class MainWindow(QMainWindow):
             self.overlay.closed.connect(self.on_stop_overlay)
             self.overlay.rois_has_items.connect(self.on_overlay_rois_changed)
 
+        self._apply_overlay_text_style(dict(self.overlay_text_style))
+
         self.overlay.set_mode("edit")
         self.overlay.show()
         start_native_overlay_tracking(
@@ -193,17 +219,20 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_translate.setEnabled(self.has_overlay_rois())
+        self._refresh_action_buttons()
         
     def on_stop_overlay(self):
         stop_native_overlay_tracking()
 
         if self.overlay:
+            self.overlay.clear_roi_texts()
             self.overlay.hide()
 
         self.btn_start.setEnabled(True)
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
+        self.btn_force_detection.setEnabled(False)
         print("Seleccion de ROI detenida.")
 
         if self.pipeline_coordinator:
@@ -226,18 +255,57 @@ class MainWindow(QMainWindow):
             try:
                 if not self.pipeline_coordinator:
                     self.pipeline_coordinator = PipelineCoordinator(self.window_selected, False, self)
+                    self.pipeline_coordinator.text_detected.connect(self.on_text_detected)
+                    self.pipeline_coordinator.text_normalized.connect(self.on_text_normalized)
                     self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
                 else:
                     self.pipeline_coordinator.hwnd = self.window_selected
 
                 self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
                 self.pipeline_coordinator.start_cycle(400)
+                self._refresh_action_buttons()
             except Exception as e:
                 print(f"Error al crear PipelineCoordinator: {e}")
+
+    def on_force_detection(self):
+        if not self.overlay or self.overlay.mode != "active" or not self.has_overlay_rois():
+            print("Forzar detección no disponible: se requiere overlay activo con ROI definidas.")
+            self._refresh_action_buttons()
+            return
+
+        if not self.pipeline_coordinator:
+            try:
+                self.pipeline_coordinator = PipelineCoordinator(self.window_selected, False, self)
+                self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
+            except Exception as e:
+                print(f"No se pudo inicializar PipelineCoordinator para forzar detección: {e}")
+                return
+
+        self.pipeline_coordinator.hwnd = self.window_selected
+        self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
+
+        dispatched = self.pipeline_coordinator.force_detection()
+        if dispatched:
+            print(f"Detección y traducción forzadas para {dispatched} ROI(s).")
+        else:
+            print("No se pudo forzar detección: no hubo ROIs válidas o falló la captura.")
+            
+    def on_text_detected(self, roi_id, text):
+        print("------------------------------------------")
+        print(f"Texto detectado listo para ROI {roi_id}: {text}")
+        if self.overlay and self.overlay.mode == "active":
+            self.overlay.update_roi_text(roi_id, text)
+            
+    def on_text_normalized(self, roi_id, text):
+        print(f"Texto normalizado listo para ROI {roi_id}: {text}")
+        if self.overlay and self.overlay.mode == "active":
+            self.overlay.update_roi_text(roi_id, text)
         
     def on_text_ready(self, roi_id, text):
-        print(f"Texto OCR listo para ROI {roi_id}: {text}")
-        
+        print(f"Texto traducido listo para ROI {roi_id}: {text}")
+        if self.overlay and self.overlay.mode == "active":
+            self.overlay.update_roi_text(roi_id, text)
+        print("------------------------------------------")
 
     def has_overlay_rois(self):
         if not self.overlay or not hasattr(self.overlay, "scene"):
@@ -247,8 +315,15 @@ class MainWindow(QMainWindow):
     def on_overlay_rois_changed(self, has_rois: bool):
         if not self.overlay:
             self.btn_translate.setEnabled(False)
+            self.btn_force_detection.setEnabled(False)
             return
         self.btn_translate.setEnabled(self.overlay.mode == "edit" and has_rois)
+        self._refresh_action_buttons()
+
+    def _refresh_action_buttons(self):
+        has_rois = self.has_overlay_rois()
+        is_active_mode = bool(self.overlay and self.overlay.mode == "active")
+        self.btn_force_detection.setEnabled(has_rois and is_active_mode)
 
     def closeEvent(self, event):
         stop_native_overlay_tracking()
@@ -294,10 +369,33 @@ class MainWindow(QMainWindow):
         providers = getattr(ocr_processor, "get_selectable_providers", lambda: ("CPUExecutionProvider",))()
         if current not in providers and providers:
             current = providers[0]
+
+        original_overlay_style = dict(self.overlay_text_style)
         
-        dialog = SettingsDialog(current, self, providers_override=providers)
+        dialog = SettingsDialog(
+            current,
+            self,
+            providers_override=providers,
+            initial_overlay_style=dict(self.overlay_text_style),
+        )
         dialog.settings_changed.connect(self.reinit_ocr_engine)
-        dialog.exec()
+        dialog.overlay_text_style_changed.connect(self._apply_overlay_text_style)
+
+        if dialog.exec() == QDialog.Accepted:
+            self.overlay_text_style = dialog.get_overlay_text_style()
+            self._apply_overlay_text_style(dict(self.overlay_text_style))
+            return
+
+        self.overlay_text_style = original_overlay_style
+        self._apply_overlay_text_style(dict(self.overlay_text_style))
+
+    def _apply_overlay_text_style(self, style_updates):
+        if not isinstance(style_updates, dict) or not style_updates:
+            return
+
+        self.overlay_text_style.update(style_updates)
+        if self.overlay:
+            self.overlay.configure_roi_text_style(**style_updates)
         
     def reinit_ocr_engine(self, new_provider):
         from app.ocr.engine import ocr_processor

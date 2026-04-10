@@ -34,7 +34,6 @@ def get_windows():
 
 
 # Definiciones de constantes y estructuras para captura de pantalla en Windows
-
 User32 = ctypes.windll.user32
 Gdi32 = ctypes.windll.gdi32
 Dwmapi = ctypes.windll.dwmapi

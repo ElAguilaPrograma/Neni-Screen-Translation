@@ -1,7 +1,7 @@
 import os
 import threading
 import ctypes
-from PIL.ImagePath import Path
+from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 from rapidocr import RapidOCR
