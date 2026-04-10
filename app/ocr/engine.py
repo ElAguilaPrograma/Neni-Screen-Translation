@@ -5,44 +5,24 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 from rapidocr import RapidOCR
+from app import settings as app_settings
 
 class OCREngine:
     _instance = None
-    _cuda_required_dlls = (
-        "cublasLt64_12.dll",
-        "cublas64_12.dll",
-        "cudart64_12.dll",
-        "cudnn64_9.dll",
-    )
+    _cuda_required_dlls = app_settings.get_ocr_cuda_required_dlls()
 
-    _provider_priority = (
-        "CUDAExecutionProvider",
-        "DmlExecutionProvider",
-        "CPUExecutionProvider",
-    )
-    _supported_provider_params = {
-        "CUDAExecutionProvider": {
-            "EngineConfig.onnxruntime.use_cuda": True,
-            "EngineConfig.onnxruntime.use_dml": False,
-        },
-        "DmlExecutionProvider": {
-            "EngineConfig.onnxruntime.use_cuda": False,
-            "EngineConfig.onnxruntime.use_dml": True,
-        },
-        "CPUExecutionProvider": {
-            "EngineConfig.onnxruntime.use_cuda": False,
-            "EngineConfig.onnxruntime.use_dml": False,
-        },
-    }
+    _provider_priority = app_settings.get_ocr_provider_priority()
+    _supported_provider_params = app_settings.get_ocr_provider_params()
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(OCREngine, cls).__new__(cls)
+            cls._instance._provider_priority = app_settings.get_ocr_provider_priority()
+            cls._instance._supported_provider_params = app_settings.get_ocr_provider_params()
+            cls._instance._cuda_required_dlls = app_settings.get_ocr_cuda_required_dlls()
             # Afinar runtime CPU antes de inicializar ONNX/RapidOCR.
-            os.environ.setdefault("OMP_NUM_THREADS", "2")
-            os.environ.setdefault("ORT_NUM_THREADS", "2")
-            os.environ.setdefault("ORT_INTER_OP_NUM_THREADS", "1")
-            os.environ.setdefault("ORT_INTRA_OP_NUM_THREADS", "2")
+            for env_name, env_value in app_settings.get_ocr_runtime_env_vars().items():
+                os.environ.setdefault(env_name, str(env_value))
             cls._instance._engine_lock = threading.RLock()
             cls._instance._dll_directory_handles = []
             cls._instance._configure_windows_cuda_dll_search_paths()
@@ -144,6 +124,14 @@ class OCREngine:
         return tuple(selectable)
 
     def _select_default_provider(self) -> str:
+        preferred_provider = app_settings.get_preferred_ocr_provider()
+        if (
+            preferred_provider in self._provider_priority
+            and preferred_provider in self.available_providers
+            and self._is_provider_runtime_ready(preferred_provider)
+        ):
+            return preferred_provider
+
         for provider in self._provider_priority:
             if provider in self.available_providers and self._is_provider_runtime_ready(provider):
                 return provider

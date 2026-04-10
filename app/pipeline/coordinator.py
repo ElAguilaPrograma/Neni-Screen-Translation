@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal, QTimer
 from app.capture.roi_capture import ROICapture
 from app.pipeline.ocr_worker import OCRWorker
 from app.translation.translator import translator
+from app import settings as app_settings
 import re
 
 class PipelineCoordinator(QObject):
@@ -20,18 +21,22 @@ class PipelineCoordinator(QObject):
         self.last_texts = {}
         self.active = active
         self.debug_logging = False
-        self._poll_interval_ms = 400
+        runtime_settings = app_settings.get_pipeline_settings()
+        self._poll_interval_ms = int(runtime_settings["poll_interval_ms"])
 
         # Umbrales de deduplicacion para evitar OCR por jitter visual del capturador.
-        self._min_changed_ratio = 0.01  # % de pixeles cuantizados deben cambiar.
-        self._quant_step = 3  # 8 niveles por canal en escala de grises (0-255 >> 3)
-        self._max_signature_side = 96
+        self._min_changed_ratio = float(runtime_settings["min_changed_ratio"])  # % de pixeles cuantizados deben cambiar.
+        self._quant_step = int(runtime_settings["quant_step"])  # 8 niveles por canal en escala de grises (0-255 >> 3)
+        self._max_signature_side = int(runtime_settings["max_signature_side"])
         self._forced_roi_ids = set()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.process_cycle)
 
-        self.ocr_worker = OCRWorker(max_pending_rois=8, parent=self)
+        self.ocr_worker = OCRWorker(
+            max_pending_rois=runtime_settings["max_pending_rois"],
+            parent=self,
+        )
         self.ocr_worker.text_ready.connect(self._on_worker_text_ready)
         self.ocr_worker.worker_error.connect(self._on_worker_error)
         self.ocr_worker.start()
@@ -39,13 +44,30 @@ class PipelineCoordinator(QObject):
         if self.active:
             self.timer.start(self._poll_interval_ms)
 
-    def start_cycle(self, poll_interval_ms=400):
+    def start_cycle(self, poll_interval_ms=None):
+        if poll_interval_ms is None:
+            poll_interval_ms = app_settings.get_pipeline_settings()["poll_interval_ms"]
         self._poll_interval_ms = int(poll_interval_ms)
         self.active = True
         if self.timer.isActive():
             self.timer.setInterval(self._poll_interval_ms)
             return
         self.timer.start(self._poll_interval_ms)
+
+    def apply_runtime_settings(self, runtime_settings=None):
+        if runtime_settings is None:
+            runtime_settings = app_settings.get_pipeline_settings()
+
+        self._poll_interval_ms = int(runtime_settings["poll_interval_ms"])
+        self._min_changed_ratio = float(runtime_settings["min_changed_ratio"])
+        self._quant_step = int(runtime_settings["quant_step"])
+        self._max_signature_side = int(runtime_settings["max_signature_side"])
+
+        if self.ocr_worker:
+            self.ocr_worker.max_pending_rois = max(1, int(runtime_settings["max_pending_rois"]))
+
+        if self.timer and self.timer.isActive():
+            self.timer.setInterval(self._poll_interval_ms)
         
     def stop_cycle(self):
         if not self.timer:

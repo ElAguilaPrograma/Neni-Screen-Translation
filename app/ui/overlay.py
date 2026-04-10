@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QFrame, QGraphicsView, QVBoxLayout, QWidget
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QPen, QColor
 from app.ui.roi_drawer import ROIDrawer
 
@@ -23,7 +23,7 @@ class WindowOverlay(QWidget):
     
     def __init__(self, x, y, w, h):
         super().__init__()
-        
+        print(f"Creando overlay en posición ({x}, {y}) con tamaño ({w}x{h})", )
         self.setWindowFlags(
             Qt.FramelessWindowHint |
             Qt.Tool
@@ -42,8 +42,7 @@ class WindowOverlay(QWidget):
         self.view.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.installEventFilter(self)
-        self.set_mode("edit")
+        self.set_mode(None)
         
         self.setFocusPolicy(Qt.StrongFocus)
         
@@ -73,8 +72,8 @@ class WindowOverlay(QWidget):
             self.setFocus(Qt.ActiveWindowFocusReason)
             self.scene.edit_mode = True
             self._sync_scene_rect()
-            
         elif mode == "active":
+            print("Activando modo activo...")
             if not self.scene.rois:
                 print("No se definieron regiones de interés (ROI). Cambiando a modo edit.")
                 self.set_mode("edit")
@@ -92,6 +91,10 @@ class WindowOverlay(QWidget):
                     item.setAcceptedMouseButtons(Qt.NoButton)
             self.view.setStyleSheet("background: transparent; border: none;")
             print("Modo activo")
+        else:
+            self.hide()
+            self.destroy()
+            print(hasattr(self, "scene"))
         
         if mode != None:    
             self.show()
@@ -121,37 +124,6 @@ class WindowOverlay(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_scene_rect()
-
-    def eventFilter(self, watched, event):
-        if watched is self.view and event.type() == QEvent.KeyPress:
-            if self._handle_key_event(event):
-                return True
-        return super().eventFilter(watched, event)
-
-    def _handle_key_event(self, event):
-        if event.key() == Qt.Key_Escape:
-            if self.mode == "active":
-                return False
-            print("Cerrando selección...")
-            self.closed.emit()
-            self.close()
-            self.hide()
-            self.set_mode(None)
-            return True
-
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self.mode == "edit":
-                self.set_mode("active")
-                print("Enter presionado, durante la edicion, cambiando a modo activo...")
-                return True
-
-        return False              
-        
-    def keyPressEvent(self, event):
-        if self._handle_key_event(event):
-            event.accept()
-            return
-        super().keyPressEvent(event)
         
     def paintEvent(self, event):
         painter = QPainter(self)

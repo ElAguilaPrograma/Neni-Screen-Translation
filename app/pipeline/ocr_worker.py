@@ -4,13 +4,16 @@ import threading
 from PySide6.QtCore import QThread, Signal
 
 from app.ocr.engine import ocr_processor
+from app import settings as app_settings
 
 class OCRWorker(QThread):
     text_ready = Signal(int, str)
     worker_error = Signal(str)
 
-    def __init__(self, max_pending_rois=8, parent=None):
+    def __init__(self, max_pending_rois=None, parent=None):
         super().__init__(parent)
+        if max_pending_rois is None:
+            max_pending_rois = app_settings.get_pipeline_settings()["max_pending_rois"]
         self.max_pending_rois = max(1, int(max_pending_rois))
         self._pending_by_roi = {}
         self._pending_order = deque()

@@ -2,6 +2,7 @@ import threading
 
 import argostranslate.package
 import argostranslate.translate
+from app import settings as app_settings
 
 class TranslatorEngine:
     _instance = None
@@ -12,19 +13,28 @@ class TranslatorEngine:
             cls._instance._lock = threading.RLock()
             cls._instance._translation = None
             cls._instance._cache = {}
-            cls._instance._cache_limit = 1024
+            cfg = app_settings.get_translation_settings()
+            cls._instance._cache_limit = int(cfg["cache_limit"])
+            cls._instance._auto_install_package = bool(cfg["auto_install_package"])
+            cls._instance.from_code = cfg["from_code"]
+            cls._instance.to_code = cfg["to_code"]
             cls._instance.setup_translator()
         return cls._instance
     
     def setup_translator(self):
-        self.from_code = "en"
-        self.to_code = "es"
+        cfg = app_settings.get_translation_settings()
+        self.from_code = cfg["from_code"]
+        self.to_code = cfg["to_code"]
+        self._cache_limit = int(cfg["cache_limit"])
+        self._auto_install_package = bool(cfg["auto_install_package"])
+        with self._lock:
+            self._cache.clear()
 
         installed_languages = argostranslate.translate.get_installed_languages()
         from_lang = next((lang for lang in installed_languages if lang.code == self.from_code), None)
         to_lang = next((lang for lang in installed_languages if lang.code == self.to_code), None)
 
-        if from_lang is None or to_lang is None:
+        if self._auto_install_package and (from_lang is None or to_lang is None):
             self._install_language_package_if_missing()
             installed_languages = argostranslate.translate.get_installed_languages()
             from_lang = next((lang for lang in installed_languages if lang.code == self.from_code), None)

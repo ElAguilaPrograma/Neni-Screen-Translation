@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPen, QColor, QBrush
+from app import settings as app_settings
 
 class ROISchema:
     def __init__(self, roi_id, x, y, w, h):
@@ -23,16 +24,7 @@ class ROIDrawer(QGraphicsScene):
     _ROI_KIND_KEY = 0
     _ROI_ID_KEY = 1
     _ROI_KIND_RECT = "roi_rect"
-    _DEFAULT_TEXT_STYLE = {
-        "font_size_px": 16,
-        "padding_x_px": 10,
-        "padding_y_px": 7,
-        "border_radius_px": 8,
-        "background_rgba": (12, 18, 32, 212),
-        "text_rgb": (245, 248, 255),
-        "border_rgba": (255, 255, 255, 70),
-        "accent_rgb": (72, 167, 255),
-    }
+    _DEFAULT_TEXT_STYLE = app_settings.get_default_overlay_text_style()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,7 +34,7 @@ class ROIDrawer(QGraphicsScene):
         self.start_point = None
         self.text_items: dict[int, QGraphicsTextItem] = {}
         self.roi_text_cache: dict[int, str] = {}
-        self.text_style = dict(self._DEFAULT_TEXT_STYLE)
+        self.text_style = app_settings.get_default_overlay_text_style()
 
     def _is_roi_rect_item(self, item):
         return isinstance(item, QGraphicsRectItem) and item.data(self._ROI_KIND_KEY) == self._ROI_KIND_RECT
@@ -127,7 +119,7 @@ class ROIDrawer(QGraphicsScene):
             updates["border_radius_px"] = max(0, int(border_radius_px))
 
         if updates:
-            self.text_style.update(updates)
+            self.text_style = app_settings.merge_overlay_text_style(self.text_style, updates)
             self._refresh_text_items()
         
     def mousePressEvent(self, event):
