@@ -1,4 +1,5 @@
 import logging
+import gc
 from PySide6.QtCore import QObject, Signal, QTimer
 from app.ocr.engine import ocr_processor
 from app.capture.roi_capture import ROICapture
@@ -72,7 +73,6 @@ class PipelineCoordinator(QObject):
                     continue
                 
                 if not force and not self.deduplication._should_run_ocr(roi_id, frame, self.last_frames):
-                    logger.debug("Salteando OCR para ROI %s por deduplicación.", roi_id)
                     continue
                 
                 if force:
@@ -82,6 +82,9 @@ class PipelineCoordinator(QObject):
                 dispached += 1
             except Exception as e:
                 logger.exception("Error al capturar y despachar ROI %s.", roi_id)
+                
+        del window_frame
+        gc.collect()
         return dispached
     
     def force_detection(self):

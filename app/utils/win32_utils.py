@@ -2,6 +2,7 @@ import ctypes
 import threading
 import time
 import logging
+import numpy as np
 from ctypes import wintypes
 from typing import TYPE_CHECKING
 from PySide6.QtGui import QImage, QPixmap
@@ -182,7 +183,7 @@ def capture_window(hwnd):
 		Gdi32.DeleteDC(memory_dc)
 		User32.ReleaseDC(hwnd, window_dc)
 
-def capture_window_for_ocr(hwnd):
+def capture_window_for_ocr(hwnd, out_buffer=None):
 	try:
 		import importlib
 		np = importlib.import_module("numpy")
@@ -247,7 +248,18 @@ def capture_window_for_ocr(hwnd):
 
 		full_bgra = np.ctypeslib.as_array(buffer).reshape((window_height, window_width, 4))
 		# Convertir BGRA a BGR una sola vez por ciclo para recortar multiples ROI.
-		return full_bgra[:, :, :3].copy()
+		bgr_view = full_bgra[:, :, :3].copy()
+
+		if (
+			out_buffer is None
+			or out_buffer.shape != bgr_view.shape
+			or out_buffer.dtype != np.uint8
+			or not out_buffer.flags.c_contiguous
+		):
+			out_buffer = np.empty_like(bgr_view)
+   
+		np.copyto(out_buffer, bgr_view, casting="no")
+		return out_buffer
 	finally:
 		Gdi32.SelectObject(memory_dc, old_bitmap)
 		Gdi32.DeleteObject(bitmap)

@@ -9,11 +9,11 @@ class Deduplication:
         self._max_signature_side = 96
 
     def _build_signature(self, frame: np.ndarray) -> np.ndarray:
-        gray = (
-            0.114 * frame[:, :, 0].astype(np.float32)
-            + 0.587 * frame[:, :, 1].astype(np.float32)
-            + 0.299 * frame[:, :, 2].astype(np.float32)
-        ).astype(np.uint8)
+        # Convertir BGR a escala de grises con float 16.
+        b = frame[:, :, 0].astype(np.uint16, copy=False)
+        g = frame[:, :, 1].astype(np.uint16, copy=False)
+        r = frame[:, :, 2].astype(np.uint16, copy=False)
+        gray = ((29 * b + 150 * g + 77 * r) >> 8).astype(np.uint8)
 
         h, w = gray.shape
         step_y = max(1, h // self._max_signature_side)

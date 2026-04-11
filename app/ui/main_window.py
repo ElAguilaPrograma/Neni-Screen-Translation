@@ -201,7 +201,9 @@ class MainWindow(QMainWindow):
         self.btn_translate.setEnabled(False)
         logger.info("Selección de ROI detenida.")
         
-        PipelineCoordinator.stop_cycle(self.pipeline_coordinator)
+        if self.pipeline_coordinator is not None:
+            self.pipeline_coordinator.shutdown()
+            
         logger.info("Pipeline de procesamiento detenido.")
         
     def on_translate(self):
@@ -216,6 +218,12 @@ class MainWindow(QMainWindow):
         self.btn_translate.setEnabled(False)
         self.overlay.set_mode("active") 
         if self.window_selected:
+            if self.pipeline_coordinator is not None:
+                self.pipeline_coordinator.shutdown()
+                try:
+                    self.pipeline_coordinator.text_ready.disconnect(self.on_text_ready)
+                except (TypeError, RuntimeError):
+                    pass
             logger.info("Creando PipelineCoordinator para ventana %s...", self.window_selected)
             try:
                 self.pipeline_coordinator = PipelineCoordinator(self.window_selected, True)
@@ -226,7 +234,6 @@ class MainWindow(QMainWindow):
         
     def on_text_ready(self, roi_id, text):
         logger.debug("Texto OCR listo para ROI %s: %s", roi_id, text)
-        
 
     def has_overlay_rois(self):
         if not self.overlay or not hasattr(self.overlay, "scene"):
@@ -241,6 +248,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         stop_native_overlay_tracking()
+        if self.pipeline_coordinator is not None:
+            self.pipeline_coordinator.shutdown()
+            
         return super().closeEvent(event)
 
     def update_preview(self, hwnd):
