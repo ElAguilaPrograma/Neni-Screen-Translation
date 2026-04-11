@@ -1,6 +1,10 @@
+import logging
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsRectItem, QGraphicsItem
 from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPen, QColor, QBrush
+
+
+logger = logging.getLogger(__name__)
 
 class ROISchema:
     def __init__(self, roi_id, x, y, w, h):
@@ -24,7 +28,7 @@ class ROIDrawer(QGraphicsScene):
         if event.button() == Qt.LeftButton:
             item_under_cursor = self.itemAt(event.scenePos(), self.views()[0].transform())
             if item_under_cursor:
-                print("Seleccionando item existente")
+                logger.debug("Seleccionando item existente")
                 super().mousePressEvent(event)
                 return
             self.start_point = event.scenePos()
@@ -45,7 +49,7 @@ class ROIDrawer(QGraphicsScene):
         super().mousePressEvent(event)
         
     def mouseClickRightButton(self, event):
-        print("Borrando de roi_drawer")
+        logger.debug("Borrando de roi_drawer")
         item = self.itemAt(event.scenePos(), self.views()[0].transform())
         if isinstance(item, QGraphicsRectItem):
             self.removeItem(item)
@@ -75,6 +79,13 @@ class ROIDrawer(QGraphicsScene):
             if isinstance(item, QGraphicsRectItem):
                 r  = item.sceneBoundingRect()
                 self.rois.append(ROISchema(i, r.x(), r.y(), r.width(), r.height()))
-                print(f"ROI guardada: ID={i}, x={r.x()}, y={r.y()}, w={r.width()}, h={r.height()}")
+                logger.debug(
+                    "ROI guardada: ID=%s, x=%s, y=%s, w=%s, h=%s",
+                    i,
+                    r.x(),
+                    r.y(),
+                    r.width(),
+                    r.height(),
+                )
         self.rois_changed.emit(len(self.rois) > 0)
         

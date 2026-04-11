@@ -1,3 +1,4 @@
+import logging
 from PySide6.QtWidgets import QFrame, QGraphicsView, QVBoxLayout, QWidget
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QPainter, QPen, QColor
@@ -15,6 +16,9 @@ except Exception:
 
     def disable_overlay_full_click_through(_overlay):
         return False
+
+
+logger = logging.getLogger(__name__)
 
 class WindowOverlay(QWidget):
     
@@ -62,7 +66,7 @@ class WindowOverlay(QWidget):
             disable_overlay_full_click_through(self)
             self.view.setInteractive(True)
             self.view.setStyleSheet("background: rgba(0, 0, 0, 80); border: 2px solid yellow;")
-            print("Modo de edicion activo")
+            logger.info("Modo de edición activo")
             
             for item in self.scene.items():
                 item.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
@@ -75,7 +79,7 @@ class WindowOverlay(QWidget):
             
         elif mode == "active":
             if not self.scene.rois:
-                print("No se definieron regiones de interés (ROI). Cambiando a modo edit.")
+                logger.warning("No se definieron regiones de interés (ROI). Cambiando a modo edit.")
                 self.set_mode("edit")
                 return
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -89,7 +93,7 @@ class WindowOverlay(QWidget):
                 for item in self.scene.items():
                     item.setAcceptedMouseButtons(Qt.NoButton)
             self.view.setStyleSheet("background: transparent; border: none;")
-            print("Modo activo")
+            logger.info("Modo activo")
         
         if mode != None:    
             self.show()
@@ -112,7 +116,7 @@ class WindowOverlay(QWidget):
         if event.key() == Qt.Key_Escape:
             if self.mode == "active":
                 return False
-            print("Cerrando selección...")
+            logger.info("Cerrando selección...")
             self.closed.emit()
             self.close()
             self.hide()
@@ -122,7 +126,7 @@ class WindowOverlay(QWidget):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self.mode == "edit":
                 self.set_mode("active")
-                print("Enter presionado, durante la edicion, cambiando a modo activo...")
+                logger.info("Enter presionado durante la edición, cambiando a modo activo...")
                 return True
 
         return False              

@@ -1,3 +1,4 @@
+import logging
 import sys
 import os
 
@@ -6,6 +7,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtWidgets import QApplication
 from app.ui.main_window import MainWindow
+
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 def main():
     app = QApplication(sys.argv)

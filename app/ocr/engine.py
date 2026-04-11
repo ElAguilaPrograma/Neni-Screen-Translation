@@ -1,5 +1,9 @@
+import logging
 import numpy as np
 from rapidocr import RapidOCR
+
+
+logger = logging.getLogger(__name__)
 
 class OCREngine:
     _instance = None
@@ -9,7 +13,7 @@ class OCREngine:
             cls._instance = super(OCREngine, cls).__new__(cls)
             # Aqui debo poner en un futuro que use cuda si esta disponible
             cls._instance.engine = RapidOCR()
-            print("Rapido OCR engine inicializado.")
+            logger.info("Rapid OCR engine inicializado.")
         return cls._instance
     
     def read(self, image: np.ndarray) -> str:

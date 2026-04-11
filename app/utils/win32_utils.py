@@ -1,6 +1,7 @@
 import ctypes
 import threading
 import time
+import logging
 from ctypes import wintypes
 from typing import TYPE_CHECKING
 from PySide6.QtGui import QImage, QPixmap
@@ -347,6 +348,9 @@ User32.SetWindowPos.argtypes = [
 User32.SetWindowPos.restype = wintypes.BOOL
 
 
+logger = logging.getLogger(__name__)
+
+
 def _get_insert_after_for_overlay(target_hwnd):
 	# Insertar "despues" de la ventana previa equivale a quedar sobre target.
 	prev_hwnd = User32.GetWindow(wintypes.HWND(target_hwnd), GW_HWNDPREV)
@@ -378,7 +382,7 @@ def place_overlay_above_window(overlay: "WindowOverlay", target_hwnd):
 		SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER
 	)
 	if not result:
-		print(f"SetWindowPos fallo al anclar overlay (target={target_hwnd}).")
+		logger.warning("SetWindowPos fallo al anclar overlay (target=%s).", target_hwnd)
 		return False
 	return True
 
@@ -413,9 +417,11 @@ def _move_resize_and_anchor_overlay_hwnd(overlay_hwnd, target_hwnd, x, y, w, h):
 		flags,
 	)
 	if not result:
-		print(
-			f"SetWindowPos fallo al mover/ajustar overlay (target={target_hwnd}, "
-			f"insert_after={insert_after_int}, flags=0x{flags:04X})."
+		logger.warning(
+			"SetWindowPos fallo al mover/ajustar overlay (target=%s, insert_after=%s, flags=0x%04X).",
+			target_hwnd,
+			insert_after_int,
+			flags,
 		)
 		return False
 	return True
@@ -460,7 +466,7 @@ def sync_overlay_to_target_window(target_hwnd, overlay: "WindowOverlay"):
 def sync_overlay_to_target_hwnd(target_hwnd, overlay_hwnd):
 	rect = _get_target_window_rect(target_hwnd)
 	if not rect:
-		print("La ventana objetivo se ha cerrado o no se puede acceder.")
+		logger.warning("La ventana objetivo se ha cerrado o no se puede acceder.")
 		return False
 	x, y, w, h = rect
 	return _move_resize_and_anchor_overlay_hwnd(overlay_hwnd, target_hwnd, x, y, w, h)
@@ -578,7 +584,7 @@ def enable_overlay_full_click_through(overlay: "WindowOverlay"):
 	updated_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
 	is_click_through = (updated_style & WS_EX_TRANSPARENT) != 0
 	if not is_click_through:
-		print("No se pudo activar full click-through en overlay.")
+		logger.warning("No se pudo activar full click-through en overlay.")
 	return is_click_through
 
 
@@ -606,7 +612,7 @@ def disable_overlay_full_click_through(overlay: "WindowOverlay"):
 	updated_style = User32.GetWindowLongW(overlay_hwnd, GWL_EXSTYLE)
 	is_click_through = (updated_style & WS_EX_TRANSPARENT) != 0
 	if is_click_through:
-		print("No se pudo desactivar full click-through en overlay.")
+		logger.warning("No se pudo desactivar full click-through en overlay.")
 	return not is_click_through
 
    

@@ -1,3 +1,4 @@
+import logging
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel
 from PySide6.QtCore import Qt
@@ -10,6 +11,9 @@ from app.utils.win32_utils import (
 )
 from app.ui.overlay import WindowOverlay
 from app.pipeline.coordinator import PipelineCoordinator
+
+
+logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     
@@ -147,18 +151,18 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             hwnd = dialog.get_selected_window()
             if hwnd:
-                print(f"Ventana seleccionada: {hwnd}")
+                logger.info("Ventana seleccionada: %s", hwnd)
                 self.btn_select.setText(f"Ventana: {hwnd}")
                 self.update_preview(hwnd)
                 self.window_selected = hwnd
                 return self.window_selected
             else:
-                print("No se seleccionó ninguna ventana.")
+                logger.warning("No se seleccionó ninguna ventana.")
                 self.preview_label.setText("No se seleccionó ninguna ventana")
         
     def on_start_overlay(self):
         if not self.window_selected:
-            print("No hay ventana seleccionada para superponer.")
+            logger.warning("No hay ventana seleccionada para superponer.")
             return
         
         if not self.overlay:
@@ -177,7 +181,7 @@ class MainWindow(QMainWindow):
         
         # Validar aqui si active en pipeline es true, de ser asi llamar a stop_cycle para pausarlo mientras se define el ROI.
         if hasattr(self.pipeline_coordinator, "active") and self.pipeline_coordinator.active:
-            print("Pausando ciclo de procesamiento para definir ROI...")
+            logger.info("Pausando ciclo de procesamiento para definir ROI...")
             self.pipeline_coordinator.stop_cycle()
 
         self.btn_start.setText("Definiendo ROI... (Presiona Enter para confirmar)")
@@ -195,15 +199,15 @@ class MainWindow(QMainWindow):
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
-        print("Seleccion de ROI detenida.")
+        logger.info("Selección de ROI detenida.")
         
         PipelineCoordinator.stop_cycle(self.pipeline_coordinator)
-        print("Pipeline de procesamiento detenido.")
+        logger.info("Pipeline de procesamiento detenido.")
         
     def on_translate(self):
-        print("Iniciando traducción... (funcionalidad no implementada)")
+        logger.info("Iniciando traducción... (funcionalidad no implementada)")
         if not self.overlay or not hasattr(self.overlay, "scene") or not self.overlay.scene.rois:
-            print("No hay ROIs definidas para procesar OCR.")
+            logger.warning("No hay ROIs definidas para procesar OCR.")
             return
 
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
@@ -212,16 +216,16 @@ class MainWindow(QMainWindow):
         self.btn_translate.setEnabled(False)
         self.overlay.set_mode("active") 
         if self.window_selected:
-            print(f"Creando PipelineCoordinator para ventana {self.window_selected}...")
+            logger.info("Creando PipelineCoordinator para ventana %s...", self.window_selected)
             try:
                 self.pipeline_coordinator = PipelineCoordinator(self.window_selected, True)
                 self.pipeline_coordinator.text_ready.connect(self.on_text_ready)
                 self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
             except Exception as e:
-                print(f"Error al crear PipelineCoordinator: {e}")
+                logger.exception("Error al crear PipelineCoordinator.")
         
     def on_text_ready(self, roi_id, text):
-        print(f"Texto OCR listo para ROI {roi_id}: {text}")
+        logger.debug("Texto OCR listo para ROI %s: %s", roi_id, text)
         
 
     def has_overlay_rois(self):
@@ -256,17 +260,17 @@ class MainWindow(QMainWindow):
         
     def keyPressEvent(self, event):
         if not self.window_selected:
-            print("No hay ventana seleccionada para iniciar la selección de ROI.")
+            logger.warning("No hay ventana seleccionada para iniciar la selección de ROI.")
             return 
         
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self.overlay and self.overlay.mode == "edit":
-                print("Ya estas en modo edición, presionando Enter para confirmar la selección...")
+                logger.debug("Ya estas en modo edición, presionando Enter para confirmar la selección...")
             if event.modifiers() & Qt.AltModifier:
-                print("Alt + Enter presionado: Iniciando selección de ROI...")
+                logger.info("Alt + Enter presionado: Iniciando selección de ROI...")
                 if self.overlay:
                     self.overlay.set_mode("edit")
                 else:
-                    print("Se esta creando de nuevo?")
+                    logger.warning("Se esta creando de nuevo?")
                     self.on_start_overlay()
         return super().keyPressEvent(event)

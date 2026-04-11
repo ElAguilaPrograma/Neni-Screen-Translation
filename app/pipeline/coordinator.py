@@ -1,10 +1,12 @@
-import numpy as np
-import xxhash
+import logging
 from PySide6.QtCore import QObject, Signal, QTimer
 from app.ocr.engine import ocr_processor
 from app.capture.roi_capture import ROICapture
 from app.pipeline.normalize_text import NormalizeText
 from app.pipeline.deduplication import Deduplication
+
+
+logger = logging.getLogger(__name__)
 
 class PipelineCoordinator(QObject):
     text_ready = Signal(int, str)
@@ -41,16 +43,16 @@ class PipelineCoordinator(QObject):
         
     def capture_and_dispatch(self, force=False):
         if not self.hwnd:
-            print("No se ha establecido un HWND válido para la captura.")
+            logger.warning("No se ha establecido un HWND válido para la captura.")
             return
         
         if not self.active_rois:
-            print("No hay ROIs activas para capturar.")
+            logger.info("No hay ROIs activas para capturar.")
             return 
         
         window_frame = ROICapture.capture_window_frame(self.hwnd)
         if window_frame is None:
-            print("No se pudo capurar el frame base de la ventana.")
+            logger.error("No se pudo capurar el frame base de la ventana.")
             return
         
         dispached = 0
@@ -66,11 +68,11 @@ class PipelineCoordinator(QObject):
                 )
                 
                 if frame is None:
-                    print(f"Error al capturar ROI {roi_id}.")
+                    logger.error("Error al capturar ROI %s.", roi_id)
                     continue
                 
                 if not force and not self.deduplication._should_run_ocr(roi_id, frame, self.last_frames):
-                    print(f"Salteando OCR para ROI {roi_id} por deduplicación.")
+                    logger.debug("Salteando OCR para ROI %s por deduplicación.", roi_id)
                     continue
                 
                 if force:
@@ -79,7 +81,7 @@ class PipelineCoordinator(QObject):
                 self.run_ocr_pipeline(roi_id, frame)
                 dispached += 1
             except Exception as e:
-                print(f"Error al capturar y despachar ROI {roi_id}: {e}")
+                logger.exception("Error al capturar y despachar ROI %s.", roi_id)
         return dispached
     
     def force_detection(self):
@@ -87,7 +89,7 @@ class PipelineCoordinator(QObject):
             
     def process_cycle(self):
         if not self.hwnd:
-            print("No se ha establecido un HWND válido para la captura.")
+            logger.warning("No se ha establecido un HWND válido para la captura.")
             return
         
         if not self.active:
