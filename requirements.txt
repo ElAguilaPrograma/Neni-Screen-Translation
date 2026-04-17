@@ -6,3 +6,7 @@ Pillow
 numpy
 rapidocr 
 onnxruntime
+opencv-python
+openvino
+paddleocr
+paddlepaddle -f https://www.paddlepaddle.org.cn/whl/mkl/avx/stable.html
