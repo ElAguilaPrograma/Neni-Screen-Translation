@@ -1,60 +1,69 @@
 import numpy as np
 import xxhash
+import cv2
 
 class Deduplication:
     def __init__(self):
-        # Umbrales de deduplicacion para evitar OCR por jitter visual del capturador.
-        self._min_changed_ratio = 0.01  # % de pixeles cuantizados deben cambiar.
-        self._quant_step = 3  # 8 niveles por canal en escala de grises (0-255 >> 3)
-        self._max_signature_side = 96
+        # Umbral para cambios estructurales (bordes). Ajustable para balancear sensibilidad vs. rendimiento.
+        self._min_edge_changed_ratio = 0.015 
+        # Resolución máxima de la firma para capturar bien los bordes sin consumir mucha CPU
+        self._max_signature_side = 120 
+        # Cuantos bits descartar al cuantizar la imagen para el hash. Ajustable para balancear sensibilidad vs. colisiones.
+        self._quant_step = 3
 
-    def _build_signature(self, frame: np.ndarray) -> np.ndarray:
-        # Convertir BGR a escala de grises con float 16.
-        b = frame[:, :, 0].astype(np.uint16, copy=False)
-        g = frame[:, :, 1].astype(np.uint16, copy=False)
-        r = frame[:, :, 2].astype(np.uint16, copy=False)
-        gray = ((29 * b + 150 * g + 77 * r) >> 8).astype(np.uint8)
-
-        h, w = gray.shape
-        step_y = max(1, h // self._max_signature_side)
-        step_x = max(1, w // self._max_signature_side)
-        small = gray[::step_y, ::step_x]
-
-        return (small >> self._quant_step).astype(np.uint8)
+    def _get_gray_downsampled(self, frame_bgr: np.ndarray) -> np.ndarray:
+        h, w = frame_bgr.shape[:2]
+        
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        
+        scale = min(1.0, self._max_signature_side / max(h, w))
+        if scale < 1.0:
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            small = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            small = gray
+            
+        return small
+        
+    def _build_edge_signature(self, gray_small: np.ndarray) -> np.ndarray:
+        edges = cv2.Canny(gray_small, threshold1=100, threshold2=200)
+        return (edges > 0).astype(np.uint8)
 
     def _should_run_ocr(self, roi_id: int, frame: np.ndarray, last_frames: dict) -> bool:
-        signature = self._build_signature(frame)
-        current_hash = xxhash.xxh64_hexdigest(signature.tobytes())
-
+        gray_small = self._get_gray_downsampled(frame)
+        
+        quantized = (gray_small >> self._quant_step).astype(np.uint8)
+        current_hash = xxhash.xxh64_hexdigest(quantized.tobytes())
+        
         previous = last_frames.get(roi_id)
         if previous is None:
+            edge_signature = self._build_edge_signature(gray_small)
             last_frames[roi_id] = {
                 "hash": current_hash,
-                "signature": signature,
+                "edge_signature": edge_signature,
             }
             return True
 
         if previous["hash"] == current_hash:
             return False
 
-        prev_signature = previous["signature"]
-        min_h = min(prev_signature.shape[0], signature.shape[0])
-        min_w = min(prev_signature.shape[1], signature.shape[1])
-        if min_h <= 0 or min_w <= 0:
+        edge_signature = self._build_edge_signature(gray_small)
+        prev_edge = previous.get("edge_signature")
+        
+        if prev_edge is None or edge_signature.shape != prev_edge.shape:
             last_frames[roi_id] = {
                 "hash": current_hash,
-                "signature": signature,
+                "edge_signature": edge_signature,
             }
             return True
-
-        diff = np.abs(
-            signature[:min_h, :min_w].astype(np.int16)
-            - prev_signature[:min_h, :min_w].astype(np.int16)
-        )
-        changed_ratio = float(np.count_nonzero(diff >= 2)) / float(diff.size)
-
+            
+        diff = np.abs(edge_signature.astype(np.int8) - prev_edge.astype(np.int8))
+        changed_ratio = np.count_nonzero(diff) / float(diff.size)
+        
         last_frames[roi_id] = {
             "hash": current_hash,
-            "signature": signature,
+            "edge_signature": edge_signature,
         }
-        return changed_ratio >= self._min_changed_ratio
+        
+        return changed_ratio >= self._min_edge_changed_ratio

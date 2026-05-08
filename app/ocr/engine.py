@@ -80,7 +80,7 @@ class OCREngine:
 
         try:
             # logger.debug(f"OCR input shape: {image.shape}, dtype: {image.dtype}")
-            output = self.engine(image, use_cls=False)
+            output = self.engine(image, use_cls=True)
             # logger.debug(f"OCR raw output type: {type(output)}, output: {output}")
             
             # Manejo para diferentes formatos de salida (tuple)
@@ -100,7 +100,7 @@ class OCREngine:
             if txts:
                 logger.debug(f"OCR txts found: {len(txts)} items")
                 text_raw = "\n".join([text for text in txts if text])
-                logger.info(f"OCR recognized text: {text_raw}")
+                # logger.info(f"OCR recognized text: {text_raw}")
                 return text_raw
             
             logger.warning(f"No text found in output. Output attrs")

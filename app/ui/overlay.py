@@ -1,6 +1,6 @@
 import logging
 from PySide6.QtWidgets import QFrame, QGraphicsView, QVBoxLayout, QWidget
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QPen, QColor
 from app.ui.roi_drawer import ROIDrawer
 
@@ -46,7 +46,6 @@ class WindowOverlay(QWidget):
         self.view.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.installEventFilter(self)
         self.set_mode("edit")
         
         self.setFocusPolicy(Qt.StrongFocus)
@@ -94,6 +93,10 @@ class WindowOverlay(QWidget):
                     item.setAcceptedMouseButtons(Qt.NoButton)
             self.view.setStyleSheet("background: transparent; border: none;")
             logger.info("Modo activo")
+        else:
+            self.hide()
+            self.destroy()
+            logger.info(f"Overlay cerrado: {hasattr(self, 'scene')}")
         
         if mode != None:    
             self.show()
@@ -105,37 +108,6 @@ class WindowOverlay(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_scene_rect()
-
-    def eventFilter(self, watched, event):
-        if watched is self.view and event.type() == QEvent.KeyPress:
-            if self._handle_key_event(event):
-                return True
-        return super().eventFilter(watched, event)
-
-    def _handle_key_event(self, event):
-        if event.key() == Qt.Key_Escape:
-            if self.mode == "active":
-                return False
-            logger.info("Cerrando selección...")
-            self.closed.emit()
-            self.close()
-            self.hide()
-            self.set_mode(None)
-            return True
-
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self.mode == "edit":
-                self.set_mode("active")
-                logger.info("Enter presionado durante la edición, cambiando a modo activo...")
-                return True
-
-        return False              
-        
-    def keyPressEvent(self, event):
-        if self._handle_key_event(event):
-            event.accept()
-            return
-        super().keyPressEvent(event)
         
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -156,5 +128,5 @@ class WindowOverlay(QWidget):
         # Texto de instrucciones
         if self.mode == "edit":
             painter.setPen(QColor(255, 255, 255))
-            painter.drawText(self.rect().adjusted(0, 0, 0, -20), Qt.AlignCenter, "Presiona Enter para confirmar la selección")
-            painter.drawText(self.rect().adjusted(0, 20, 0, 0), Qt.AlignCenter, "Presiona Escape para salir de la selección")
+            painter.drawText(self.rect().adjusted(0, 0, 0, -20), Qt.AlignCenter, "Manten el click izquierdo para dibujar una ROI.")
+            painter.drawText(self.rect().adjusted(0, 20, 0, 0), Qt.AlignCenter, "Click derecho para eliminar una ROI.")

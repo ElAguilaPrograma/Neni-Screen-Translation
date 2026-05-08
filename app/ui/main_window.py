@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Screen Translator")
-        self.setFixedSize(700, 600)
+        self.setFixedSize(900, 800)
         
         # Estructura de la interfaz
         central_widget = QWidget()
@@ -41,13 +41,19 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel("La ventana seleccionada aparecerá aquí")
         self.btn_stop = QPushButton("Detener Selección")
         self.btn_translate = QPushButton("Iniciar Traducción")
+        self.btn_stop_translation = QPushButton("Detener Traducción")
+        self.btn_force_translation = QPushButton("Forzar Traducción")
         
         self.btn_select.setObjectName("btn_select")
         self.btn_start.setObjectName("btn_start")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_translate.setObjectName("btn_translate")
+        self.btn_stop_translation.setObjectName("btn_stop_translation")
+        self.btn_force_translation.setObjectName("btn_force_translation")
         self.btn_translate.setEnabled(False)
         self.btn_stop.setEnabled(False)
+        self.btn_stop_translation.setEnabled(False)
+        self.btn_force_translation.setEnabled(False)
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(200)
         self.preview_label.setStyleSheet(
@@ -66,6 +72,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_start)
         layout.addWidget(self.btn_stop)
         layout.addWidget(self.btn_translate)
+        layout.addWidget(self.btn_stop_translation)
+        layout.addWidget(self.btn_force_translation)
         # Estilos
         self.setStyleSheet("""
             QMainWindow {
@@ -139,12 +147,42 @@ class MainWindow(QMainWindow):
                 color: #f1faef;
                 border: none;
             }
+            QPushButton#btn_stop_translation {
+                background-color: #8764b8;   /* Morado para detener traducción */
+                color: white;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton#btn_stop_translation:hover {
+                background-color: #6b4c9a;   /* Morado más oscuro en hover */
+            }
+            QPushButton#btn_stop_translation:disabled {
+                background-color: #c5b3db;
+                color: #f5f0fa;
+                border: none;
+            }
+            QPushButton#btn_force_translation {
+                background-color: #f7b731;   /* Amarillo/ámbar para forzar traducción */
+                color: #2c2c2c;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton#btn_force_translation:hover {
+                background-color: #e0a120;   /* Ámbar más oscuro en hover */
+            }
+            QPushButton#btn_force_translation:disabled {
+                background-color: #f5d99c;
+                color: #9a9a9a;
+                border: none;
+            }
         """)
         
         self.btn_select.clicked.connect(self.on_select)
         self.btn_start.clicked.connect(self.on_start_overlay)
         self.btn_stop.clicked.connect(self.on_stop_overlay)
         self.btn_translate.clicked.connect(self.on_translate)
+        self.btn_stop_translation.clicked.connect(self.on_stop_translation)
+        self.btn_force_translation.clicked.connect(self.on_force_translation)
         
     def on_select(self):
         dialog = WindowSelectorDialog(self)
@@ -184,7 +222,7 @@ class MainWindow(QMainWindow):
             logger.info("Pausando ciclo de procesamiento para definir ROI...")
             self.pipeline_coordinator.stop_cycle()
 
-        self.btn_start.setText("Definiendo ROI... (Presiona Enter para confirmar)")
+        self.btn_start.setText("Definiendo ROI...")
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_translate.setEnabled(self.has_overlay_rois())
@@ -199,6 +237,8 @@ class MainWindow(QMainWindow):
         self.btn_start.setText("Seleccionar regiones de interés (ROI)")
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
+        self.btn_stop_translation.setEnabled(False)
+        self.btn_force_translation.setEnabled(False)
         logger.info("Selección de ROI detenida.")
         
         if self.pipeline_coordinator is not None:
@@ -216,6 +256,8 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_translate.setEnabled(False)
+        self.btn_stop_translation.setEnabled(True)
+        self.btn_force_translation.setEnabled(True)
         self.overlay.set_mode("active") 
         if self.window_selected:
             if self.pipeline_coordinator is not None:
@@ -231,6 +273,35 @@ class MainWindow(QMainWindow):
                 self.pipeline_coordinator.update_rois(self.overlay.scene.rois)
             except Exception as e:
                 logger.exception("Error al crear PipelineCoordinator.")
+                
+    def on_stop_translation(self):
+        if self.pipeline_coordinator:
+            logger.info("Deteniendo traducción...")
+            self.pipeline_coordinator.shutdown()
+        self.btn_stop_translation.setEnabled(False)
+        self.btn_force_translation.setEnabled(False)
+        self.btn_start.setEnabled(True)
+        self.btn_translate.setEnabled(self.has_overlay_rois())
+        if self.overlay:
+            self.overlay.set_mode(None)  # Esto destruirá el overlay actual
+    
+    def on_force_translation(self):
+        if not self.overlay or self.overlay.mode != "active":
+            logger.warning("No se puede forzar traducción: el modo activo no está habilitado.")
+            return
+        
+        if not self.pipeline_coordinator:
+            logger.warning("No se puede forzar traducción: inicia la traducción primero.")
+            return
+        
+        try:
+            dispatched = self.pipeline_coordinator.force_detection()
+            if dispatched:
+                logger.info(f"Traducción forzada para {dispatched} ROI(s).")
+            else:
+                logger.warning("No se despacharon ROIs: verifica que existan ROIs activas.")
+        except Exception as e:
+            logger.exception("Error al forzar traducción.")
         
     def on_text_ready(self, roi_id, text):
         logger.debug("Texto OCR listo para ROI %s: %s", roi_id, text)
@@ -267,20 +338,3 @@ class MainWindow(QMainWindow):
             Qt.SmoothTransformation,
         )
         self.preview_label.setPixmap(scaled_pixmap)
-        
-    def keyPressEvent(self, event):
-        if not self.window_selected:
-            logger.warning("No hay ventana seleccionada para iniciar la selección de ROI.")
-            return 
-        
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self.overlay and self.overlay.mode == "edit":
-                logger.debug("Ya estas en modo edición, presionando Enter para confirmar la selección...")
-            if event.modifiers() & Qt.AltModifier:
-                logger.info("Alt + Enter presionado: Iniciando selección de ROI...")
-                if self.overlay:
-                    self.overlay.set_mode("edit")
-                else:
-                    logger.warning("Se esta creando de nuevo?")
-                    self.on_start_overlay()
-        return super().keyPressEvent(event)
